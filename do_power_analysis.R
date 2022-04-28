@@ -68,38 +68,43 @@ calc_F <- function(f, P) {
     return(F_)
 }
 
-build_A <- function(P, F_) {
-    N <- length(P) + 1
-    A <- matrix(0, N, N)
-    A[1,] <- F_
-    for (n in 1:(N-1)) {
-        A[n+1,n] <- P[n]
-    }
-    return(A)
+#build_A <- function(P, F_) {
+#    N <- length(P) + 1
+#    A <- matrix(0, N, N)
+#    A[1,] <- F_
+#    for (n in 1:(N-1)) {
+#        A[n+1,n] <- P[n]
+#    }
+#    return(A)
+#}
+
+project_pop <- function(z, P, F_) {
+  z_0 <- sum(z[15:45] * F_[15:45])
+  return(c(z_0, z[1:99]*P))
 }
 
-calc_pop_size <- function(A_g, A_b, famine_mask) {
+calc_pop_size <- function(P_g, F_g, P_b, F_b, famine_mask) {
     # For now, use something of a kleuge to get the starting age structure by
     # first getting the age structure after multiplying the entire sequence
     # of matrices out, starting with a uniform age structure (this requires two
     # rather than one set of multiplications but is a perfectly fine, albeit
     # slow way of getting the starting age structure; it could instead be
-    # approximated by solving for the stable age structure of A_g or using
-    # Tulja's small noise approximation).
-    N <- nrow(A_g)
+    # approximated by solving for the stable age structure of the Leslie matrix
+    # or using Tulja's small noise approximation).
+    N <- length(F_g)
 
     # To reduce package dependencies, use a for loop for the matrix
     # multiplications rather than taking the power of the matrices for the
     # famine and non-famine cases.
     M <- diag(N)
+    z <- rep(1,N)
     for (is_famine in famine_mask) {
         if (is_famine) {
-            M <- A_b %*% M
+            z <- project_pop(z, P_b, F_b)
         } else {
-            M <- A_g %*% M
+            z <- project_pop(z, P_g, F_g)
         }
     }
-    z <- M %*% matrix(1,N,1)
     z <- z / sum(z)
 
     num_periods <- length(famine_mask)
@@ -109,9 +114,9 @@ calc_pop_size <- function(A_g, A_b, famine_mask) {
 
     for (is_famine in famine_mask) {
         if (is_famine) {
-            z <- A_b %*% z
+            z <- project_pop(z, P_b, F_b)
         } else {
-            z <- A_g %*% z
+            z <- project_pop(z, P_g, F_g)
         }
         counter <- counter + 1
         pop_size[counter+1] <- sum(z)
@@ -181,10 +186,8 @@ calc_neg_log_lik <- function(th,
 
    P_g <- calc_P(a, kappa, FALSE)
    F_g <- calc_F(f, P_g)
-   A_g <- build_A(P_g, F_g)
    P_b <- calc_P(a, kappa, TRUE)
    F_b <- calc_F(f, P_b)
-   A_b <- build_A(P_b, F_b)
 
    num_years <- length(tau)
    famine_mask_matrix <- matrix(NA, num_famine_samps, num_years)
@@ -201,7 +204,7 @@ calc_neg_log_lik <- function(th,
      dt <- dt[3]
      t_mask <- t_mask + dt
      t0 <- proc.time()
-     pop_size_known <- calc_pop_size(A_g, A_b, famine_mask_matrix[n_f,])
+     pop_size_known <- calc_pop_size(P_g, F_g, P_b, F_b, famine_mask_matrix[n_f,])
      v <- pop_size_known / sum(pop_size_known)
      t1 <- proc.time()
      dt <- as.numeric(t1-t0)
@@ -250,16 +253,18 @@ sample_param_vector <- function(th0,
   # TODO: add prior to calculation
   TH <- matrix(NA,length(th), num_mcmc_samp)
   for (n_mcmc in 1:num_mcmc_samp) {
-      print('----')
+      print('**********')
       print(n_mcmc)
       print(eta)
       th_prop <- th + rnorm(length(th)) * th_scale
+      print('----')
       eta_prop <- calc_neg_log_lik(th_prop,
                                    rc_meas,
                                    calib_df,
                                    tau,
                                    num_famine_samps,
                                    meas_matrix)
+      print('----')
       if (!is.finite(eta_prop)) {
           accept <- FALSE
           print('Not finite')
@@ -275,7 +280,8 @@ sample_param_vector <- function(th0,
           th <- th_prop
           eta <- eta_prop
       }
-      TH[,num_mcmc_samp] <- th
+      TH[,n_mcmc] <- th
+      print(paste0('p_g = ', th[1]))
   }
 
   # At least for now, do not thin
@@ -286,15 +292,12 @@ sample_param_vector <- function(th0,
 # [1 - 2*p_gb, 2*p_gb]
 P_g <- calc_P(a0, kappa0, FALSE)
 F_g <- calc_F(f0, P_g)
-A_g <- build_A(P_g, F_g)
 P_b <- calc_P(a0, kappa0, TRUE)
 F_b <- calc_F(f0, P_b)
-A_b <- build_A(P_b, F_b)
 
-#famine_mask <- c(F, T, F, F, F, T, T, F, F, F)
 p_gb <- .1
 famine_mask <- sample_famine_mask(p_gb, 100)
-pop_size <- calc_pop_size(A_g, A_b, famine_mask)
+pop_size <- calc_pop_size(P_g, F_g, P_b, F_b, famine_mask)
 
 # First, define a function to calculate the population size given the input
 # parameter vectors, including the realized famine years. To do so, utilize a
@@ -317,19 +320,19 @@ run_experiment <- function(p_gb, a0, kappa0, f0, N, rand_seed) {
   # Create simulated data
   P_g <- calc_P(a0, kappa0, FALSE)
   F_g <- calc_F(f0, P_g)
-  A_g <- build_A(P_g, F_g)
   P_b <- calc_P(a0, kappa0, TRUE)
   F_b <- calc_F(f0, P_b)
-  A_b <- build_A(P_b, F_b)
 
   # For now, set th0 equal to the true parameter vector
   # th has ordering [p_gb, a1, ..., a5, kappa, f]
   th0 <- c(p_gb, a0, kappa0, f0)
   # Use th0 / 20 as the scale for the proposal distribution in MCMC sampling
-  th_scale <- th0 / 5
+  # dividing by 5 seems about right for small sample sizes
+  # dividing by 10 seems about right for N=100
+  th_scale <- th0 / 10
 
   famine_mask_known <- sample_famine_mask(p_gb, 100)
-  pop_size_known <- calc_pop_size(A_g, A_b, famine_mask)
+  pop_size_known <- calc_pop_size(P_b, F_g, P_b, F_b, famine_mask)
   # Normalize the population size to sum to 1
   # dtau is 1, so pop_size_known  and M have the correct normalizations.
   # pop_size_known is the same as v in the JAS article.
@@ -359,5 +362,10 @@ run_experiment <- function(p_gb, a0, kappa0, f0, N, rand_seed) {
 
 p_gb <- .025
 N <- 100
+TH_a <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
+TH_b <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
 
-run_experiment(p_gb, a0, kappa0, f0, N, 100)
+p_gb <- .1
+N <- 100
+TH_a <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
+TH_b <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
