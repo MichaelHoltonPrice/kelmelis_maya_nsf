@@ -161,6 +161,7 @@ calc_neg_log_lik <- function(th,
                              tau,
                              num_famine_samps,
                              meas_matrix) {
+   print('top of calc_neg_log_lik')
    # Extract parameters
    p_gb  <- th[1]
    a1    <- th[2]
@@ -188,13 +189,36 @@ calc_neg_log_lik <- function(th,
    num_years <- length(tau)
    famine_mask_matrix <- matrix(NA, num_famine_samps, num_years)
    log_lik_for_lse <- rep(NA, num_famine_samps)
+   print('before famine sample for loop')
+   t_mask <- 0
+   t_v <- 0
+   t_mult <- 0
    for (n_f in 1:num_famine_samps) {
+     t0 <- proc.time()
      famine_mask_matrix[n_f,] <- sample_famine_mask(p_gb, num_years)
+     t1 <- proc.time()
+     dt <- as.numeric(t1-t0)
+     dt <- dt[3]
+     t_mask <- t_mask + dt
+     t0 <- proc.time()
      pop_size_known <- calc_pop_size(A_g, A_b, famine_mask_matrix[n_f,])
      v <- pop_size_known / sum(pop_size_known)
-     #lik_sum <- lik_sum + meas_matrix %*% v
+     t1 <- proc.time()
+     dt <- as.numeric(t1-t0)
+     dt <- dt[3]
+     t_v <- t_v + dt
+
+     t0 <- proc.time()
      log_lik_for_lse[n_f] <- log(1/num_famine_samps) + sum(log(meas_matrix %*% v))
+     t1 <- proc.time()
+     dt <- as.numeric(t1-t0)
+     dt <- dt[3]
+     t_mult <- t_mult + dt
    }
+   print('after famine sample for loop')
+   print(t_mask)
+   print(t_v)
+   print(t_mult)
    log_lik <- logSumExp(log_lik_for_lse)
    return(-log_lik)
 }
@@ -283,11 +307,13 @@ error_spec=list(type="unif_fm",min=.0021,max=.0028)
 start_date <- 600 # AD 600 is the first date
 tau <- seq(start_date, start_date+ 100-1)
 # The number of experiments for each value of the effect size
-num_experim <- 3
-samp_size <- 2
-num_famine_samps <- 100
-#for (p_gb in seq(0.025, 0.4, by=.025)) {
-for (p_gb in seq(0.025, 0.050, by=.025)) {
+
+# To fully take advantange of multiple cores, run each experiment inside a
+# standalone function, run_experiment.
+run_experiment <- function(p_gb, a0, kappa0, f0, N, rand_seed) {
+  set.seed(rand_seed)
+  num_famine_samps <- 100
+
   # Create simulated data
   P_g <- calc_P(a0, kappa0, FALSE)
   F_g <- calc_F(f0, P_g)
@@ -302,34 +328,36 @@ for (p_gb in seq(0.025, 0.050, by=.025)) {
   # Use th0 / 20 as the scale for the proposal distribution in MCMC sampling
   th_scale <- th0 / 5
 
-  for(ee in 1:num_experim) {
-    famine_mask_known <- sample_famine_mask(p_gb, 100)
-    pop_size_known <- calc_pop_size(A_g, A_b, famine_mask)
-    # Normalize the population size to sum to 1
-    # dtau is 1, so pop_size_known  and M have the correct normalizations.
-    # pop_size_known is the same as v in the JAS article.
-    pop_size_known <- pop_size_known / sum(pop_size_known)
-    true_calendar_dates <- sample(length(pop_size_known),
-                                         samp_size,
-                                         replace=T,
-                                         prob=pop_size_known)
-    # Make the dates calendar dates, AD
-    true_calendar_dates <- true_calendar_dates + start_date - 1
-    rc_meas <-
-      draw_rc_meas_using_date(true_calendar_dates,
-                              calib_df,
-                              error_spec,
-                              is_AD=TRUE)
-    meas_matrix <- calc_meas_matrix(tau, rc_meas$phi_m, rc_meas$sig_m, calib_df)
-    TH <- sample_param_vector(th0,
-                              rc_meas,
-                              calib_df,
-                              tau,
-                              num_famine_samps,
-                              meas_matrix,
-                              th_scale)
-    break
-  }
-  break
+  famine_mask_known <- sample_famine_mask(p_gb, 100)
+  pop_size_known <- calc_pop_size(A_g, A_b, famine_mask)
+  # Normalize the population size to sum to 1
+  # dtau is 1, so pop_size_known  and M have the correct normalizations.
+  # pop_size_known is the same as v in the JAS article.
+  pop_size_known <- pop_size_known / sum(pop_size_known)
+  true_calendar_dates <- sample(length(pop_size_known),
+                                       N,
+                                       replace=T,
+                                       prob=pop_size_known)
+  # Make the dates calendar dates, AD
+  true_calendar_dates <- true_calendar_dates + start_date - 1
+  rc_meas <-
+    draw_rc_meas_using_date(true_calendar_dates,
+                            calib_df,
+                            error_spec,
+                            is_AD=TRUE)
+  meas_matrix <- calc_meas_matrix(tau, rc_meas$phi_m, rc_meas$sig_m, calib_df)
+  TH <- sample_param_vector(th0,
+                            rc_meas,
+                            calib_df,
+                            tau,
+                            num_famine_samps,
+                            meas_matrix,
+                            th_scale)
+
+  return(TH)
 }
 
+p_gb <- .025
+N <- 100
+
+run_experiment(p_gb, a0, kappa0, f0, N, 100)
