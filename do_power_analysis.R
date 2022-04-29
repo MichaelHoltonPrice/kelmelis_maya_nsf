@@ -1,8 +1,20 @@
-# 0. Clear the workspace and load packages
+# 0. Clear the workspace, load packages, source the needed functions, create a
+#    data directory (if necessary), and create an analysis name based on the
+#    current time.
 rm(list=ls())
 library(baydem)
 library(matrixStats) # for logSumExp
+library(HDInterval)
+library(doParallel)
 
+source("power_analysis_functions.R")
+
+if (!dir.exists('data')) {
+  dir.create('data')
+}
+
+analysis_name <- as.character(Sys.time())
+analysis_name <- gsub(":", "-", analysis_name)
 # 1. Set the true values
 
 # The true total fertiltiy rate is 5 (half of babies are female)
@@ -11,8 +23,8 @@ f0 <- 5
 # The true Siler parameter vector is from Gage and Dyke (1986), table TBD
 a0 <- c(0.175,1.40,0.368*0.01,0.075*0.001,0.917*0.1)
 
-# The true boost to mortality is kappa = 1.2 (a 20% increase)
-kappa0 <- 1.2
+# The true boost to mortality is kappa = .2 (a 20% increase)
+kappa0 <- .2
 
 # The final model parameter is the probability of transitioning from a
 # non-famine to a famine year, which is half the probabilty of transitioning
@@ -40,264 +52,7 @@ set.seed(1000)
 #     famine -->     famine   2*p_gb
 #     famine --> non-famine   1 - 2*p_gb
 
-calc_P <- function(a, kappa, is_famine) {
-    x <- 0:99
-    cum_haz <- a[1]/a[2]*(1 - exp(-a[2]*x)) + a[3]*x - a[4]/a[5]*(1 - exp(a[5]*x))
-    if (is_famine) {
-        cum_haz <- cum_haz * (1 + kappa)
-    }
-    # The
-    l_of_x <- exp(-cum_haz)
 
-    # Calculate the survival probability, P
-    P <- l_of_x[2:100] / l_of_x[1:99]
-
-    return(P)
-}
-
-calc_F <- function(f, P) {
-    # Use 15 as the age of first reproduction (F1 to F14 are zero)
-    # Use 45 as the age at last reproduction and normalize so that the number
-    # of offspring sum to f
-    # In addition, account for mortality over each time period in weighting the
-    # fertility
-    F_ <- P[15:45] # Here and elsewhere, use F_ rather than F since F is FALSE
-    F_ <- F_ / sum(F_)
-    F_ <- F_ * f / 2 # divide by two to track females
-    F_ <- c(rep(0,14), F_, rep(0,55))
-    return(F_)
-}
-
-#build_A <- function(P, F_) {
-#    N <- length(P) + 1
-#    A <- matrix(0, N, N)
-#    A[1,] <- F_
-#    for (n in 1:(N-1)) {
-#        A[n+1,n] <- P[n]
-#    }
-#    return(A)
-#}
-
-project_pop <- function(z, P, F_) {
-  z_0 <- sum(z[15:45] * F_[15:45])
-  return(c(z_0, z[1:99]*P))
-}
-
-calc_pop_size <- function(P_g, F_g, P_b, F_b, famine_mask) {
-    # For now, use something of a kleuge to get the starting age structure by
-    # first getting the age structure after multiplying the entire sequence
-    # of matrices out, starting with a uniform age structure (this requires two
-    # rather than one set of multiplications but is a perfectly fine, albeit
-    # slow way of getting the starting age structure; it could instead be
-    # approximated by solving for the stable age structure of the Leslie matrix
-    # or using Tulja's small noise approximation).
-    N <- length(F_g)
-
-    # To reduce package dependencies, use a for loop for the matrix
-    # multiplications rather than taking the power of the matrices for the
-    # famine and non-famine cases.
-    M <- diag(N)
-    z <- rep(1,N)
-    for (is_famine in famine_mask) {
-        if (is_famine) {
-            z <- project_pop(z, P_b, F_b)
-        } else {
-            z <- project_pop(z, P_g, F_g)
-        }
-    }
-    z <- z / sum(z)
-
-    num_periods <- length(famine_mask)
-    pop_size <- rep(NA, num_periods+1)
-    pop_size[1] <- 1
-    counter <- 0
-
-    for (is_famine in famine_mask) {
-        if (is_famine) {
-            z <- project_pop(z, P_b, F_b)
-        } else {
-            z <- project_pop(z, P_g, F_g)
-        }
-        counter <- counter + 1
-        pop_size[counter+1] <- sum(z)
-    }
-
-    # Use the mean population at the start and end of the period as the
-    # population estimate.
-    pop_size <- (pop_size[1:num_periods] + pop_size[2:(num_periods+1)])/2
-    return(pop_size)
-}
-
-sample_famine_mask <- function(p_gb, num_periods) {
-  H <- matrix(NA,2,2)
-  H[1,1] <- 1 -   p_gb
-  H[1,2] <-       p_gb
-  H[2,1] <- 1 - 2*p_gb
-  H[2,2] <-     2*p_gb
-
-  # The overall probability is the dominant left eigenvector, normalized to
-  # sum to 1
-  w0 <- eigen(t(H))$vectors[,1]
-  w0 <- w0 / sum(w0)
-  famine_mask <- sample(c(F,T), 1, replace=FALSE, prob=w0)
-
-  for (n in 2:num_periods) {
-      if(famine_mask[n-1]) {
-          # Last year was a famine
-          w <- H[2,]
-      } else {
-          # Last year was not a famine
-          w <- H[1,]
-      }
-      famine_mask <- c(famine_mask, sample(c(F,T), 1, replace=FALSE, prob=w))
-  }
-  return(famine_mask)
-}
-
-is_th_valid <- function(th) {
-    return(!any(th <= 0))
-}
-
-# Calculate the negative log-likelihood
-# th has ordering [p_gb, a1, ..., a5, kappa, f]
-calc_neg_log_lik <- function(th,
-                             rc_meas,
-                             calib_df,
-                             tau,
-                             num_famine_samps,
-                             meas_matrix) {
-   print('top of calc_neg_log_lik')
-   # Extract parameters
-   p_gb  <- th[1]
-   a1    <- th[2]
-   a2    <- th[3]
-   a3    <- th[4]
-   a4    <- th[5]
-   a5    <- th[6]
-   kappa <- th[7]
-   f     <- th[8]
-
-   # TODO: ensure parameter vector is valid
-   if (!is_th_valid(th)) {
-       return(-Inf)
-   }
-   
-   a <- th[2:6]
-
-   P_g <- calc_P(a, kappa, FALSE)
-   F_g <- calc_F(f, P_g)
-   P_b <- calc_P(a, kappa, TRUE)
-   F_b <- calc_F(f, P_b)
-
-   num_years <- length(tau)
-   famine_mask_matrix <- matrix(NA, num_famine_samps, num_years)
-   log_lik_for_lse <- rep(NA, num_famine_samps)
-   print('before famine sample for loop')
-   t_mask <- 0
-   t_v <- 0
-   t_mult <- 0
-   for (n_f in 1:num_famine_samps) {
-     t0 <- proc.time()
-     famine_mask_matrix[n_f,] <- sample_famine_mask(p_gb, num_years)
-     t1 <- proc.time()
-     dt <- as.numeric(t1-t0)
-     dt <- dt[3]
-     t_mask <- t_mask + dt
-     t0 <- proc.time()
-     pop_size_known <- calc_pop_size(P_g, F_g, P_b, F_b, famine_mask_matrix[n_f,])
-     v <- pop_size_known / sum(pop_size_known)
-     t1 <- proc.time()
-     dt <- as.numeric(t1-t0)
-     dt <- dt[3]
-     t_v <- t_v + dt
-
-     t0 <- proc.time()
-     log_lik_for_lse[n_f] <- log(1/num_famine_samps) + sum(log(meas_matrix %*% v))
-     t1 <- proc.time()
-     dt <- as.numeric(t1-t0)
-     dt <- dt[3]
-     t_mult <- t_mult + dt
-   }
-   print('after famine sample for loop')
-   print(t_mask)
-   print(t_v)
-   print(t_mult)
-   log_lik <- logSumExp(log_lik_for_lse)
-   return(-log_lik)
-}
-
-# Sample from the posterior distribution of the parameter vector
-sample_param_vector <- function(th0,
-                                rc_meas,
-                                calib_df,
-                                tau,
-                                num_famine_samps,
-                                meas_matrix,
-                                th_scale) {
-  # Calculate the initial negative log-likelihood, and ensure it is finite
-  eta0 <- calc_neg_log_lik(th0,
-                           rc_meas,
-                           calib_df,
-                           tau,
-                           num_famine_samps,
-                           meas_matrix)
-
-  if (!is.finite(eta0)) {
-      stop('eta0 is not finite')
-  }
-
-  num_mcmc_samp <- 1000
-  th <- th0
-  eta <- eta0
-
-  # TODO: add prior to calculation
-  TH <- matrix(NA,length(th), num_mcmc_samp)
-  for (n_mcmc in 1:num_mcmc_samp) {
-      print('**********')
-      print(n_mcmc)
-      print(eta)
-      th_prop <- th + rnorm(length(th)) * th_scale
-      print('----')
-      eta_prop <- calc_neg_log_lik(th_prop,
-                                   rc_meas,
-                                   calib_df,
-                                   tau,
-                                   num_famine_samps,
-                                   meas_matrix)
-      print('----')
-      if (!is.finite(eta_prop)) {
-          accept <- FALSE
-          print('Not finite')
-      } else {
-          # Calculate the acceptance parameter
-          a <- min(1, exp(-(eta_prop - eta)))
-          print(a)
-          accept <- runif(1) < a
-      }
-      print(accept)
-
-      if (accept) {
-          th <- th_prop
-          eta <- eta_prop
-      }
-      TH[,n_mcmc] <- th
-      print(paste0('p_g = ', th[1]))
-  }
-
-  # At least for now, do not thin
-  return(TH)
-}
-
-# [1 -   p_gb,   p_gb]
-# [1 - 2*p_gb, 2*p_gb]
-P_g <- calc_P(a0, kappa0, FALSE)
-F_g <- calc_F(f0, P_g)
-P_b <- calc_P(a0, kappa0, TRUE)
-F_b <- calc_F(f0, P_b)
-
-p_gb <- .1
-famine_mask <- sample_famine_mask(p_gb, 100)
-pop_size <- calc_pop_size(P_g, F_g, P_b, F_b, famine_mask)
 
 # First, define a function to calculate the population size given the input
 # parameter vectors, including the realized famine years. To do so, utilize a
@@ -307,65 +62,90 @@ pop_size <- calc_pop_size(P_g, F_g, P_b, F_b, famine_mask)
 calib_df <- load_calib_curve('intcal20')
 error_spec=list(type="unif_fm",min=.0021,max=.0028)
 
+num_times <- 400
 start_date <- 600 # AD 600 is the first date
-tau <- seq(start_date, start_date+ 100-1)
+tau <- seq(start_date, start_date + num_times -1)
 # The number of experiments for each value of the effect size
 
-# To fully take advantange of multiple cores, run each experiment inside a
-# standalone function, run_experiment.
-run_experiment <- function(p_gb, a0, kappa0, f0, N, rand_seed) {
-  set.seed(rand_seed)
-  num_famine_samps <- 100
 
-  # Create simulated data
-  P_g <- calc_P(a0, kappa0, FALSE)
-  F_g <- calc_F(f0, P_g)
-  P_b <- calc_P(a0, kappa0, TRUE)
-  F_b <- calc_F(f0, P_b)
+p_gb <- .2
+N_vect <- 100*2^(0:5)
+#N_vect <- N_vect[3:5]
+#N_vect <- c(100,1000)
+exp_per_N <- 100
 
-  # For now, set th0 equal to the true parameter vector
-  # th has ordering [p_gb, a1, ..., a5, kappa, f]
-  th0 <- c(p_gb, a0, kappa0, f0)
-  # Use th0 / 20 as the scale for the proposal distribution in MCMC sampling
-  # dividing by 5 seems about right for small sample sizes
-  # dividing by 10 seems about right for N=100
-  th_scale <- th0 / 10
+set.seed(1011)
+seed_matrix <- matrix(sample.int(length(N_vect)*exp_per_N),nrow=length(N_vect))
 
-  famine_mask_known <- sample_famine_mask(p_gb, 100)
-  pop_size_known <- calc_pop_size(P_b, F_g, P_b, F_b, famine_mask)
-  # Normalize the population size to sum to 1
-  # dtau is 1, so pop_size_known  and M have the correct normalizations.
-  # pop_size_known is the same as v in the JAS article.
-  pop_size_known <- pop_size_known / sum(pop_size_known)
-  true_calendar_dates <- sample(length(pop_size_known),
-                                       N,
-                                       replace=T,
-                                       prob=pop_size_known)
-  # Make the dates calendar dates, AD
-  true_calendar_dates <- true_calendar_dates + start_date - 1
-  rc_meas <-
-    draw_rc_meas_using_date(true_calendar_dates,
-                            calib_df,
-                            error_spec,
-                            is_AD=TRUE)
-  meas_matrix <- calc_meas_matrix(tau, rc_meas$phi_m, rc_meas$sig_m, calib_df)
-  TH <- sample_param_vector(th0,
-                            rc_meas,
-                            calib_df,
-                            tau,
-                            num_famine_samps,
-                            meas_matrix,
-                            th_scale)
+counter <- 0
+prob_list <- list()
+for (k1 in 1:length(N_vect)) {
+  N <- N_vect[k1]
+  for (k2 in 1:exp_per_N) {
+    for (k3 in 1:2) {
+      use_age <- k3 == 2
 
-  return(TH)
+      counter <- counter + 1
+      prob <- list(p_gb=p_gb,
+                   a0=a0,
+                   kappa0=kappa0,
+                   f0=f0,
+                   N=N,
+                   num_times=num_times,
+                   use_age=use_age,
+                   seed=seed_matrix[k1,k2],
+                   counter=counter,
+                   num_prob=length(N_vect)*exp_per_N*2,
+                   analysis_name=analysis_name)
+      prob_list[[counter]] <- prob
+    }
+  }
 }
 
-p_gb <- .025
-N <- 100
-TH_a <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
-TH_b <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
+registerDoParallel(detectCores())
+t0 <- Sys.time()
+success_vect <- foreach(n=1:length(prob_list),.combine=cbind) %dopar% {
+  success <- exp_wrapper(prob_list[[n]])
+}
+t1 <- Sys.time()
+stopImplicitCluster()
 
-p_gb <- .1
-N <- 100
-TH_a <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
-TH_b <- run_experiment(p_gb, a0, kappa0, f0, N, 100)
+# For clarity, use another set of for loops to unpack success_vect
+success_array <- array(NA,dim=c(length(N_vect), exp_per_N, 2))
+counter <- 0
+for (k1 in 1:length(N_vect)) {
+  N <- N_vect[k1]
+  for (k2 in 1:exp_per_N) {
+    for (k3 in 1:2) {
+      counter <- counter + 1
+      success_array[k1, k2, k3] <- success_vect[counter]
+    }
+  }
+}
+
+power_vect_no_age <- rowSums(success_array[,,1]) / ncol(success_array[,,1])
+power_vect_age    <- rowSums(success_array[,,2]) / ncol(success_array[,,2])
+
+y_max <- max(power_vect_no_age, power_vect_age)
+pdf('power_curve.pdf')
+  plot(N_vect, power_vect_no_age, xlab='N', ylab='Power', ylim=c(0,y_max), col='black')
+  points(N_vect, power_vect_age, col='red')
+dev.off()
+
+#exp_obj_1a <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 100)
+#exp_obj_1b <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 101)
+#
+#print(hdi(exp_obj_1a$samp_obj$TH[6,1000:2000]))
+#print(hdi(exp_obj_1b$samp_obj$TH[6,1000:2000]))
+#print(hdi(exp_obj_1a$samp_obj$TH[7,1000:2000]))
+#print(hdi(exp_obj_1b$samp_obj$TH[7,1000:2000]))
+
+
+
+#plot_sample_n(exp_obj_1a, 1000)
+#plot_sample_n(exp_obj_1a, 1100)
+#plot_sample_n(exp_obj_1a, 1200)
+#plot_sample_n(exp_obj_1a, 1300)
+#plot_sample_n(exp_obj_1a, 1400)
+#plot_sample_n(exp_obj_1a, 1500)
+#plot_sample_n(exp_obj_1a, 1600)
