@@ -1,5 +1,8 @@
+# TODO: consider making the number of age classes an input rather than hard
+#       coding it
 calc_P <- function(a, kappa, is_famine) {
-    x <- 0:99
+    #x <- 0:99
+    x <- 0:79
     cum_haz <- a[1]/a[2]*(1 - exp(-a[2]*x)) + a[3]*x - a[4]/a[5]*(1 - exp(a[5]*x))
     if (is_famine) {
         cum_haz <- cum_haz * (1 + kappa)
@@ -8,7 +11,8 @@ calc_P <- function(a, kappa, is_famine) {
     l_of_x <- exp(-cum_haz)
 
     # Calculate the survival probability, P
-    P <- l_of_x[2:100] / l_of_x[1:99]
+    #P <- l_of_x[2:100] / l_of_x[1:99]
+    P <- l_of_x[2:80] / l_of_x[1:79]
 
     return(P)
 }
@@ -22,7 +26,8 @@ calc_F <- function(f, P) {
     F_ <- P[15:45] # Here and elsewhere, use F_ rather than F since F is FALSE
     F_ <- F_ / sum(F_)
     F_ <- F_ * f / 2 # divide by two to track females
-    F_ <- c(rep(0,14), F_, rep(0,55))
+    #F_ <- c(rep(0,14), F_, rep(0,55))
+    F_ <- c(rep(0,14), F_, rep(0,35))
     return(F_)
 }
 
@@ -38,7 +43,8 @@ calc_F <- function(f, P) {
 
 project_pop <- function(z, P, F_) {
   z_0 <- sum(z[15:45] * F_[15:45])
-  return(c(z_0, z[1:99]*P))
+  #return(c(z_0, z[1:99]*P))
+  return(c(z_0, z[1:79]*P))
 }
 
 calc_pop_size <- function(P_g, F_g, P_b, F_b,
@@ -53,16 +59,32 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
     # N_a The number of age groups
     N_a <- length(F_g)
 
+    if (any(is.na(P_g))) {
+      print(P_g)
+      stop("P_g contains one or more NAs")
+    }
+    if (any(is.na(F_g))) {
+      stop("F_g contains one or more NAs")
+    }
+    if (any(is.na(P_b))) {
+      stop("P_b contains one or more NAs")
+    }
+    if (any(is.na(F_b))) {
+      stop("F_b contains one or more NAs")
+    }
+
     # To reduce package dependencies, use a for loop for the matrix
     # multiplications rather than taking the power of the matrices for the
     # famine and non-famine cases.
     z <- rep(1,N_a)
+    counter <- 0
     for (is_famine in famine_mask) {
-        if (is_famine) {
-            z <- project_pop(z, P_b, F_b)
-        } else {
-            z <- project_pop(z, P_g, F_g)
-        }
+      counter <- counter + 1
+      if (is_famine) {
+        z <- project_pop(z, P_b, F_b)
+      } else {
+        z <- project_pop(z, P_g, F_g)
+      }
     }
     z <- z / sum(z)
 
@@ -94,10 +116,16 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
     if (!return_aad_prob) {
       return(pop_size)
     } else {
+      if (any(is.na(Z))) {
+        stop('Z no entries of Z should be negative')
+      }
       if (any(Z < 0 )) {
         stop('There should be no negative entries in Z')
       }
       # Create the age-at-death probability vector, aad_prob
+      # TODO: the following for loop is likely why this function takes a good
+      #       deal longer to execute when return_aad_prob is TRUE. It could be
+      #       vectorized.
       aad_prob <- rep(0, N_a)
       for (n_a in 1:(N_a-1)) {
         for (n_t in 1:num_periods) {
@@ -165,12 +193,29 @@ calc_log_prob_th_given_h <- function(th,
    
   a <- th[1:5]
 
+  # For the mortality, some parameterizations with very small values of the
+  # mortality hazard at high ages evaluate to NaN. Return Inf if this happens.
+  # Do the same for F_g in case I am forgetting an edge case.
   P_g <- calc_P(a, kappa, FALSE)
+  if (any(is.na(P_g))) {
+    return(Inf)
+  }
   F_g <- calc_F(f, P_g)
+  # TODO: consider whether this should throw an error
+  if (any(is.na(F_g))) {
+    return(Inf)
+  }
   P_b <- calc_P(a, kappa, TRUE)
+  if (any(is.na(P_b))) {
+    return(Inf)
+  }
   F_b <- calc_F(f, P_b)
+  # TODO: consider whether this should throw an error
+  if (any(is.na(F_g))) {
+    return(Inf)
+  }
 
-  pop_size<- calc_pop_size(P_g, F_g, P_b, F_b, h, return_aad_prob=use_age)
+  pop_size <- calc_pop_size(P_g, F_g, P_b, F_b, h, return_aad_prob=use_age)
   if (use_age) {
     aad_prob <- pop_size$aad_prob
     pop_size <- pop_size$pop_size
@@ -270,8 +315,7 @@ sample_param_vector <- function(th0,
   # probabilities, m0 (in this case, m0 has only one entry, p_gb, that
   # determines all the other entries)
   num_times <- length(tau)
-  h0 <- sample_famine_mask(m0, num_times) # the number of time periods,
-                                          # 100, need not be hard coded
+  h0 <- sample_famine_mask(m0, num_times)
 
   use_age <- length(aad_vect) != 0
   burn_in <- 1000
@@ -288,6 +332,13 @@ sample_param_vector <- function(th0,
   TH <- matrix(NA,length(th), num_mcmc_steps)
   H <- matrix(NA,length(h), num_mcmc_steps)
   M <- matrix(NA,length(m), num_mcmc_steps)
+  assess_run_times <- FALSE
+  if (assess_run_times) {
+    t_mask <- 0
+    t_th_given_h <- 0
+    t_m_given_h <- 0
+  }
+
   for (n_mcmc in 1:num_mcmc_steps) {
       if (verbose) {
         print('**********')
@@ -295,7 +346,19 @@ sample_param_vector <- function(th0,
         print('(a) draw h|m')
       }
       h_before <- h
+      # probability for the next sampling step. If so, reject the h
+      if (assess_run_times) {
+        t0 <- proc.time()
+      }
       h <- sample_famine_mask(m, num_times)
+      if (assess_run_times) {
+        t1 <- proc.time()
+        dt <- as.numeric(t1-t0)
+        dt <- dt[3]
+        t_mask <- t_mask + dt
+      }
+ 
+
       # Though rare, it's possible that this new sample yields an untenable
       # probability for the next sampling step. If so, reject the h
       log_lik_curr <- calc_log_prob_th_given_h(th,
@@ -315,10 +378,20 @@ sample_param_vector <- function(th0,
         print('(b) sample th|h')
       }
       th_prop <- th + rnorm(length(th))*th_scale
+
+      if (assess_run_times) {
+        t0 <- proc.time()
+      }
       log_lik_prop <- calc_log_prob_th_given_h(th_prop,
                                                h, # the famine mask
                                                meas_matrix,
                                                aad_vect)
+      if (assess_run_times) {
+        t1 <- proc.time()
+        dt <- as.numeric(t1-t0)
+        dt <- dt[3]
+        t_th_given_h <- t_th_given_h + dt
+      }
 
       if (!is.finite(log_lik_prop)) {
           accept <- FALSE
@@ -345,7 +418,16 @@ sample_param_vector <- function(th0,
         print('(c) sample m|h')
       }
       m_prop <- m + rnorm(length(m))*m_scale
+      if (assess_run_times) {
+        t0 <- proc.time()
+      }
       log_lik_curr <- calc_log_prob_m_given_h(m, h)
+      if (assess_run_times) {
+        t1 <- proc.time()
+        dt <- as.numeric(t1-t0)
+        dt <- dt[3]
+        t_m_given_h <- t_m_given_h + dt
+      }
       if (!is.finite(log_lik_curr)) {
           stop('log_lik_curr is not finite. must handle this')
       }
@@ -379,6 +461,13 @@ sample_param_vector <- function(th0,
       if (verbose) {
         print(paste0('p_gb = ', m[1]))
       }
+  }
+
+  if (assess_run_times) {
+      print('Run times of mask, th_given_h, and m_given_h')
+      print(t_mask)
+      print(t_th_given_h)
+      print(t_m_given_h)
   }
 
   # At least for now, do not thin
@@ -420,7 +509,7 @@ run_experiment <- function(p_gb,
   if (use_age) {
       aad_prob_known <- pop_size_known$aad_prob
       pop_size_known <- pop_size_known$pop_size
-      Nage <- round(N*.2)
+      Nage <- round(N*.1) # Assume 1 skeleton for 10 radiocarbon dates
   }
   # Normalize the population size to sum to 1
   # dtau is 1, so pop_size_known  and M have the correct normalizations.
