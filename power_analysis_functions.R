@@ -42,7 +42,7 @@ project_pop <- function(z, P, F_) {
 }
 
 calc_pop_size <- function(P_g, F_g, P_b, F_b,
-                          famine_mask, return_age_vect=FALSE) {
+                          famine_mask, return_aad_prob=FALSE) {
     # For now, use something of a kleuge to get the starting age structure by
     # first getting the age structure after multiplying the entire sequence
     # of matrices out, starting with a uniform age structure (this requires two
@@ -50,12 +50,13 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
     # slow way of getting the starting age structure; it could instead be
     # approximated by solving for the stable age structure of the Leslie matrix
     # or using Tulja's small noise approximation).
-    N <- length(F_g)
+    # N_a The number of age groups
+    N_a <- length(F_g)
 
     # To reduce package dependencies, use a for loop for the matrix
     # multiplications rather than taking the power of the matrices for the
     # famine and non-famine cases.
-    z <- rep(1,N)
+    z <- rep(1,N_a)
     for (is_famine in famine_mask) {
         if (is_famine) {
             z <- project_pop(z, P_b, F_b)
@@ -70,7 +71,7 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
     pop_size[1] <- 1
     counter <- 0
 
-    if (return_age_vect) {
+    if (return_aad_prob) {
       Z <- matrix(NA, length(z), num_periods+1)
       Z[,1] <- z
     }
@@ -82,7 +83,7 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
         }
         counter <- counter + 1
         pop_size[counter+1] <- sum(z)
-        if (return_age_vect) {
+        if (return_aad_prob) {
           Z[,counter+1] <- z
         }
     }
@@ -90,12 +91,24 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
     # Use the mean population at the start and end of the period as the
     # population estimate.
     pop_size <- (pop_size[1:num_periods] + pop_size[2:(num_periods+1)])/2
-    if (!return_age_vect) {
+    if (!return_aad_prob) {
       return(pop_size)
     } else {
-      age_vect <- rowSums(Z)
-      age_vect <- age_vect / sum(age_vect)
-      return(list(pop_size=pop_size, age_vect=age_vect))
+      if (any(Z < 0 )) {
+        stop('There should be no negative entries in Z')
+      }
+      # Create the age-at-death probability vector, aad_prob
+      aad_prob <- rep(0, N_a)
+      for (n_a in 1:(N_a-1)) {
+        for (n_t in 1:num_periods) {
+          # For this age group, add the number of  deaths between time periods
+          aad_prob[n_a] <- aad_prob[n_a] - Z[n_a+1,n_t+1] + Z[n_a,n_t]
+        }
+        # Everybody in the last age group dies
+        aad_prob[N_a] <- aad_prob[N_a] + Z[N_a,n_t]
+      }
+      aad_prob <- aad_prob / sum(aad_prob)
+      return(list(pop_size=pop_size, aad_prob=aad_prob))
     }
 }
 
@@ -134,8 +147,8 @@ is_th_valid <- function(th) {
 calc_log_prob_th_given_h <- function(th,
                                      h, # the famine mask
                                      meas_matrix,
-                                     known_ages=c()) {
-  use_age <- length(known_ages) != 0
+                                     aad_vect=c()) {
+  use_age <- length(aad_vect) != 0
   # Extract parameters
   a1    <- th[1]
   a2    <- th[2]
@@ -157,18 +170,18 @@ calc_log_prob_th_given_h <- function(th,
   P_b <- calc_P(a, kappa, TRUE)
   F_b <- calc_F(f, P_b)
 
-  pop_size<- calc_pop_size(P_g, F_g, P_b, F_b, h, return_age_vect=use_age)
+  pop_size<- calc_pop_size(P_g, F_g, P_b, F_b, h, return_aad_prob=use_age)
   if (use_age) {
-    age_vect <- pop_size$age_vect
+    aad_prob <- pop_size$aad_prob
     pop_size <- pop_size$pop_size
   }
   v <- pop_size/ sum(pop_size)
   lik_vect <- meas_matrix %*% v
   log_lik <- sum(log(lik_vect))
   if (use_age) {
-    for (n_a in 1:length(known_ages)) {
-      ind_age <- known_ages[n_a]
-      log_lik <- log_lik + log(age_vect[ind_age])
+    for (k in 1:length(aad_vect)) {
+      ind_age <- aad_vect[k]
+      log_lik <- log_lik + log(aad_prob[ind_age])
     }
   }
   return(log_lik)
@@ -251,7 +264,7 @@ sample_param_vector <- function(th0,
                                 meas_matrix,
                                 th_scale,
                                 m_scale,
-                                known_ages,
+                                aad_vect,
                                 verbose=FALSE) {
   # First, make a draw for the latent states given the Markov transition
   # probabilities, m0 (in this case, m0 has only one entry, p_gb, that
@@ -260,7 +273,7 @@ sample_param_vector <- function(th0,
   h0 <- sample_famine_mask(m0, num_times) # the number of time periods,
                                           # 100, need not be hard coded
 
-  use_age <- length(known_ages) != 0
+  use_age <- length(aad_vect) != 0
   burn_in <- 1000
   thinning <- 10
   total_samples <- 100
@@ -288,14 +301,14 @@ sample_param_vector <- function(th0,
       log_lik_curr <- calc_log_prob_th_given_h(th,
                                                h, # the famine mask
                                                meas_matrix,
-                                               known_ages)
+                                               aad_vect)
  
       if (!is.finite(log_lik_curr)) {
           h <- h_before
           log_lik_curr <- calc_log_prob_th_given_h(th,
                                                    h, # the famine mask
                                                    meas_matrix,
-                                                   known_ages)
+                                                   aad_vect)
       }
 
       if (verbose) {
@@ -305,7 +318,7 @@ sample_param_vector <- function(th0,
       log_lik_prop <- calc_log_prob_th_given_h(th_prop,
                                                h, # the famine mask
                                                meas_matrix,
-                                               known_ages)
+                                               aad_vect)
 
       if (!is.finite(log_lik_prop)) {
           accept <- FALSE
@@ -403,9 +416,9 @@ run_experiment <- function(p_gb,
 
   famine_mask_known <- sample_famine_mask(p_gb, num_times)
   pop_size_known <- calc_pop_size(P_g, F_g, P_b, F_b,
-                                  famine_mask_known, return_age_vect=use_age)
+                                  famine_mask_known, return_aad_prob=use_age)
   if (use_age) {
-      age_vect <- pop_size_known$age_vect
+      aad_prob_known <- pop_size_known$aad_prob
       pop_size_known <- pop_size_known$pop_size
       Nage <- round(N*.2)
   }
@@ -428,12 +441,12 @@ run_experiment <- function(p_gb,
   tau <- seq(start_date, start_date + num_times -1)
   meas_matrix <- calc_meas_matrix(tau, rc_meas$phi_m, rc_meas$sig_m, calib_df)
   if (use_age) {
-    known_ages <- sample(length(age_vect),
+    aad_vect_known <- sample(length(aad_prob_known),
                          Nage,
                          replace=T,
-                         prob=age_vect)
+                         prob=aad_prob_known)
   } else {
-      known_ages <- c()
+      aad_vect_known <- c()
   }
   samp_obj <- sample_param_vector(th0,
                                   m0,
@@ -444,7 +457,7 @@ run_experiment <- function(p_gb,
                                   meas_matrix,
                                   th_scale,
                                   m_scale,
-                                  known_ages,
+                                  aad_vect_known,
                                   verbose=verbose)
 
   sim_info <- list(th_known=th0,
@@ -454,7 +467,7 @@ run_experiment <- function(p_gb,
                    pop_size_known=pop_size_known,
                    rc_meas=rc_meas,
                    tau=tau,
-                   known_ages=known_ages)
+                   aad_vect_known=aad_vect_known)
   return(list(sim_info=sim_info, samp_obj=samp_obj))
 }
 
@@ -517,7 +530,7 @@ plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
   files <- list.files('data')
 
   # Subset to files beginning with the input analysis_name
-  ind <- unlist(lapply(files, function(f){startsWith(f,analysis_name)}))
+  ind <- which(unlist(lapply(files, function(f){startsWith(f,analysis_name)})))
   files <- files[ind]
 
   # Extract the counter (i.e., experiment number within this analysis)
@@ -536,7 +549,14 @@ plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
           file_path <- file.path('data',
                                  paste0(analysis_name,'_',counter,'.rds'))
           result <- readRDS(file_path)
+          print('----')
+          print(counter)
+          #print(counter)
+          #print(result)
           success_array[k1, k2, k3] <- result$success
+          if (k3 == 2) {
+            print(result$success)
+          }
         }
       }
     }

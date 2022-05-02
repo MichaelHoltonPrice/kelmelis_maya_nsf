@@ -132,20 +132,6 @@ pdf('power_curve.pdf')
   points(N_vect, power_vect_age, col='red')
 dev.off()
 
-#exp_obj_1a <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 100)
-#exp_obj_1b <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 101)
-#
-#print(hdi(exp_obj_1a$samp_obj$TH[6,1000:2000]))
-#print(hdi(exp_obj_1b$samp_obj$TH[6,1000:2000]))
-#print(hdi(exp_obj_1a$samp_obj$TH[7,1000:2000]))
-#print(hdi(exp_obj_1b$samp_obj$TH[7,1000:2000]))
 
-
-
-#plot_sample_n(exp_obj_1a, 1000)
-#plot_sample_n(exp_obj_1a, 1100)
-#plot_sample_n(exp_obj_1a, 1200)
-#plot_sample_n(exp_obj_1a, 1300)
-#plot_sample_n(exp_obj_1a, 1400)
-#plot_sample_n(exp_obj_1a, 1500)
-#plot_sample_n(exp_obj_1a, 1600)
+#exp_obj_no_age <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 100, FALSE)
+#exp_obj_age <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 100, TRUE)
