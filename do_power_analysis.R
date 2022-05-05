@@ -72,7 +72,8 @@ p_gb <- .2
 N_vect <- 100*2^(0:5)
 #N_vect <- N_vect[3:5]
 #N_vect <- c(100,1000)
-exp_per_N <- 100
+#exp_per_N <- 100
+exp_per_N <- 400
 
 set.seed(1011)
 seed_matrix <- matrix(sample.int(length(N_vect)*exp_per_N),nrow=length(N_vect))

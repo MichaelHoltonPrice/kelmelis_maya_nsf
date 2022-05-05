@@ -664,7 +664,20 @@ plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
    
   y_max <- max(power_vect_no_age, power_vect_age, na.rm=TRUE)
   pdf(paste0('power_curve_',analysis_name,'.pdf'))
-    plot(N_vect, power_vect_no_age, xlab='N', ylab='Power', ylim=c(0,y_max), col='black')
-    points(N_vect, power_vect_age, col='red')
+    plot(N_vect,
+         power_vect_no_age,
+         xlab='',
+         ylab='Power',
+         ylim=c(0,y_max),
+         col='black',
+         xaxt='n',
+         type='o')
+    points(N_vect, power_vect_age, col='red', type='o')
+    axis(1, N_vect, N_vect)
+    axis(1, N_vect, round(N_vect/10), line=2.5)
+    x_offset <- 2400
+    y_offset <- 1.00
+    mtext("Num Rad Carb Samples", side=1, line=y_offset,       at=2400)
+    mtext("Num Skeletal Samples", side=1, line=y_offset + 2.5, at=2400)
   dev.off()
 }
