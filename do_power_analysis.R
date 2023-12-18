@@ -70,6 +70,7 @@ tau <- seq(start_date, start_date + num_times -1)
 
 p_gb <- .2
 N_vect <- 100*2^(0:5)
+N_vect <- N_vect[5:6]
 #N_vect <- N_vect[3:5]
 #N_vect <- c(100,1000)
 #exp_per_N <- 100
@@ -103,9 +104,12 @@ for (k1 in 1:length(N_vect)) {
   }
 }
 
+t0 <- Sys.time()
+
+package_list <- c('baydem', 'matrixStats', 'HDInterval', 'doParallel')
 registerDoParallel(detectCores())
 t0 <- Sys.time()
-success_vect <- foreach(n=1:length(prob_list),.combine=cbind) %dopar% {
+success_vect <- foreach(n=1:length(prob_list),.combine=cbind, .packages=package_list) %dopar% {
   success <- exp_wrapper(prob_list[[n]])
 }
 t1 <- Sys.time()

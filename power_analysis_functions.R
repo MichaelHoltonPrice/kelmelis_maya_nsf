@@ -570,17 +570,28 @@ exp_wrapper <- function(prob) {
                             prob$num_times,
                             prob$seed,
                             prob$use_age)
-  f_lo <- 4
-  f_hi <- 6
-  hdi_obj <- hdi(exp_obj$samp_obj$TH[7,1000:2000])
+  # For the Bayesian power calculation, the region of practical equivalence
+  # (ROPE) is 0 to 0.4 (the true value is 0.2)
+  kappa_lo <- 0
+  kappa_hi <- 0.4
+
+  # Extract the vector of kappa values from the posterior sampling. The
+  # first 1000 samples are "burn-in", so we discard them.
+  kappa_vect <- exp_obj$samp_obj$TH[6,1000:2000]
+  
+  # Use the HDInterval package to determine the highest density interval (HDI)
+  hdi_obj <- hdi(kappa_vect)
   hdi_interval <- as.numeric(hdi_obj)
-  #success <- (hdi_interval[1] <= f_lo) && (f_hi <= hdi_interval[2])
-  success <- (f_lo <= hdi_interval[1]) && (hdi_interval[2] <= f_hi)
+
+  # The "experiment" is a success if the HDI lies entirely inside the ROPE
+  success <- (kappa_lo <= hdi_interval[1]) && (hdi_interval[2] <= kappa_hi)
+
+  # Save the data to file
   file_path <- file.path('data',
                          paste0(prob$analysis_name, '_', prob$counter, '.rds'))
   save_obj <- list(exp_obj=exp_obj,
-                   f_lo=f_lo,
-                   f_hi=f_hi,
+                   kappa_lo=kappa_lo,
+                   kappa_hi=kappa_hi,
                    hdi_obj=hdi_obj,
                    hdi_interval=hdi_interval,
                    success=success)
