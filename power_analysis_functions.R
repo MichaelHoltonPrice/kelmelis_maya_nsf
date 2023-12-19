@@ -295,6 +295,8 @@ calc_log_prob_m_given_h <- function(m, h) {
     # Calculate the log likelihood of the parameter m given actual/sampled hidden
     # states h. m has only one entry, p_gb = m[1], but for more complicated hidden
     # markov models would include more terms.
+    # m -- The parameter vector for the hidden markov component of the model
+    # h -- The vector mask of famine years (TRUE for a famine/bad year, FALSE otherwise)
 
     # p_gb cannot be negative
     p_gb <- m[1]
@@ -366,261 +368,330 @@ sample_param_vector <- function(th0,
                                 m_scale,
                                 aad_vect,
                                 verbose=FALSE) {
-  # First, make a draw for the latent states given the Markov transition
-  # probabilities, m0 (in this case, m0 has only one entry, p_gb, that
-  # determines all the other entries)
-  num_times <- length(tau)
-  h0 <- sample_famine_mask(m0, num_times)
+    # Do the Bayesian sampling for the full model. This occurs in three,
+    # repeating accept/reject steps (| stands for given):
+    #
+    # (a) Sample  h|m, where h is the famine mask and m = c(p_gb)
+    # (b) Sample th|h, where th is the parameter vector for the demographic model
+    # (c) Sample  m|h
+    # (d) repeat (a) through (c)
+    # First, make a draw for the latent states given the Markov transition
+    # probabilities, m0 (in this case, m0 has only one entry, p_gb, that
+    # determines all the other entries)
+    # Create an initial sample of the famine mask using the known value of m0
+    # (by ergodicity, how one initializes h0 does not change the sampling
+    # stastitics if enough samples are used, and using m0 to initialize h0
+    # reduces how long the "burn-in" needs to be)
+    num_times <- length(tau) # number of time periods
+    h0 <- sample_famine_mask(m0, num_times)
 
-  use_age <- length(aad_vect) != 0
-  burn_in <- 1000
-  thinning <- 10
-  total_samples <- 100
+    # Do we have any age-at-death estimates?
+    use_age <- length(aad_vect) != 0
 
-  num_mcmc_steps <- burn_in + thinning * total_samples
-  th <- th0
-  m <- m0
-  h <- h0
-  #eta <- eta0
+    # Define our sampling parameters (these could be input control parameters)
+    burn_in <- 1000
+    thinning <- 10 # This is here for the future, but we are not actually using it yet
+    total_samples <- 100
 
-  # TODO: add prior to calculation
-  TH <- matrix(NA,length(th), num_mcmc_steps)
-  H <- matrix(NA,length(h), num_mcmc_steps)
-  M <- matrix(NA,length(m), num_mcmc_steps)
-  assess_run_times <- FALSE
-  if (assess_run_times) {
-    t_mask <- 0
-    t_th_given_h <- 0
-    t_m_given_h <- 0
-  }
+    num_mcmc_steps <- burn_in + thinning * total_samples
 
-  for (n_mcmc in 1:num_mcmc_steps) {
-      if (verbose) {
-        print('**********')
-        print(n_mcmc)
-        print('(a) draw h|m')
-      }
-      h_before <- h
-      # probability for the next sampling step. If so, reject the h
-      if (assess_run_times) {
-        t0 <- proc.time()
-      }
-      h <- sample_famine_mask(m, num_times)
-      if (assess_run_times) {
-        t1 <- proc.time()
-        dt <- as.numeric(t1-t0)
-        dt <- dt[3]
-        t_mask <- t_mask + dt
-      }
+    # Initialize all the variables we need to sample
+    th <- th0
+    m <- m0
+    h <- h0
+
+    # TODO: Consider adding prior to calculation so we do not implicitly assume uniform priors
+    # Define matrices to store our samples (one for each of th, m, and h)
+    TH <- matrix(NA,length(th), num_mcmc_steps)
+    H <- matrix(NA,length(h), num_mcmc_steps) # not the same as the transition matrix used elsewhere
+    M <- matrix(NA,length(m), num_mcmc_steps)
+
+
+    # A dev switch to assess the run times of different parts of the sampling
+    assess_run_times <- FALSE
+    if (assess_run_times) {
+      t_mask <- 0
+      t_th_given_h <- 0
+      t_m_given_h <- 0
+    }
+
+    # Enter the core sampling loop
+    for (n_mcmc in 1:num_mcmc_steps) {
+        # (a) draw h|m
+        if (verbose) {
+            print('**********')
+            print(n_mcmc)
+            print('(a) draw h|m')
+        }
+        # Store h before we sample it
+        h_before <- h
+        if (assess_run_times) {
+            t0 <- proc.time()
+        }
+        # Actually sample h
+        h <- sample_famine_mask(m, num_times)
+        if (assess_run_times) {
+            t1 <- proc.time()
+            dt <- as.numeric(t1-t0)
+            dt <- dt[3]
+            t_mask <- t_mask + dt
+        }
  
 
-      # Though rare, it's possible that this new sample yields an untenable
-      # probability for the next sampling step. If so, reject the h
-      log_lik_curr <- calc_log_prob_th_given_h(th,
-                                               h, # the famine mask
-                                               meas_matrix,
-                                               aad_vect)
+        # Calculate the log-likelihood for this aspect of the sampling
+        log_lik_curr <- calc_log_prob_th_given_h(th,
+                                                 h, # the famine mask
+                                                 meas_matrix,
+                                                 aad_vect)
  
-      if (!is.finite(log_lik_curr)) {
-          h <- h_before
-          log_lik_curr <- calc_log_prob_th_given_h(th,
-                                                   h, # the famine mask
-                                                   meas_matrix,
-                                                   aad_vect)
-      }
+        # Though rare, it's possible that this new sample yields an untenable
+        # probability for the next sampling step. If so, reject the h (which
+        # means we need to recalculate the log_lik_curr value)
+        if (!is.finite(log_lik_curr)) {
+            h <- h_before
+            log_lik_curr <- calc_log_prob_th_given_h(th,
+                                                     h, # the famine mask
+                                                     meas_matrix,
+                                                     aad_vect)
+        }
 
-      if (verbose) {
-        print('(b) sample th|h')
-      }
-      th_prop <- th + rnorm(length(th))*th_scale
+        # (a) draw th|h
+        if (verbose) {
+            print('(b) sample th|h')
+        }
+        # Use a scaled normal draw to propose a new value of th
+        th_prop <- th + rnorm(length(th))*th_scale
+  
+        if (assess_run_times) {
+            t0 <- proc.time()
+        }
+        # Calculate the log-likelihood for this aspect of the sampling
+        log_lik_prop <- calc_log_prob_th_given_h(th_prop,
+                                                 h, # the famine mask
+                                                 meas_matrix,
+                                                 aad_vect)
+        if (assess_run_times) {
+            t1 <- proc.time()
+            dt <- as.numeric(t1-t0)
+            dt <- dt[3]
+            t_th_given_h <- t_th_given_h + dt
+        }
 
-      if (assess_run_times) {
-        t0 <- proc.time()
-      }
-      log_lik_prop <- calc_log_prob_th_given_h(th_prop,
-                                               h, # the famine mask
-                                               meas_matrix,
-                                               aad_vect)
-      if (assess_run_times) {
-        t1 <- proc.time()
-        dt <- as.numeric(t1-t0)
-        dt <- dt[3]
-        t_th_given_h <- t_th_given_h + dt
-      }
+        # Do the accept/reject logic
+        if (!is.finite(log_lik_prop)) {
+            # Always reject the new sample if the associated log likelihood is not finite 
+            accept <- FALSE
+            if (verbose) {
+                print('Not finite')
+            }
+        } else {
+            # The log likelihood is finite. Calculate the acceptance parameter
+            # and randomly choose whether to accept the sample.
+            a <- min(1, exp(log_lik_prop - log_lik_curr))
+            if (verbose) {
+                print(a)
+            }
+            accept <- runif(1) < a
+        }
+        if (verbose) {
+            print(accept)
+        }
 
-      if (!is.finite(log_lik_prop)) {
-          accept <- FALSE
-          if (verbose) {
-            print('Not finite')
-          }
-      } else {
-          # Calculate the acceptance parameter
-          a <- min(1, exp(log_lik_prop - log_lik_curr))
-          if (verbose) {
-            print(a)
-          }
-          accept <- runif(1) < a
-      }
-      if (verbose) {
-        print(accept)
-      }
+        # Set th to equal th_prop if accept is TRUE
+        if (accept) {
+            th <- th_prop
+        }
 
-      if (accept) {
-          th <- th_prop
-      }
+        # (c) draw m|h
+        if (verbose) {
+            print('(c) sample m|h')
+        }
+        # Use a scaled normal draw to propose a new value of m
+        m_prop <- m + rnorm(length(m))*m_scale
+        if (assess_run_times) {
+            t0 <- proc.time()
+        }
+        log_lik_curr <- calc_log_prob_m_given_h(m, h)
+        if (assess_run_times) {
+            t1 <- proc.time()
+            dt <- as.numeric(t1-t0)
+            dt <- dt[3]
+            t_m_given_h <- t_m_given_h + dt
+        }
+        if (!is.finite(log_lik_curr)) {
+            stop('log_lik_curr is not finite. must handle this')
+        }
+        # Really prob_h_given_m in the sampling formula, but they are the same
+        log_lik_prop <- calc_log_prob_m_given_h(m_prop, h)
 
-      if (verbose) {
-        print('(c) sample m|h')
-      }
-      m_prop <- m + rnorm(length(m))*m_scale
-      if (assess_run_times) {
-        t0 <- proc.time()
-      }
-      log_lik_curr <- calc_log_prob_m_given_h(m, h)
-      if (assess_run_times) {
-        t1 <- proc.time()
-        dt <- as.numeric(t1-t0)
-        dt <- dt[3]
-        t_m_given_h <- t_m_given_h + dt
-      }
-      if (!is.finite(log_lik_curr)) {
-          stop('log_lik_curr is not finite. must handle this')
-      }
-      # Really prob_h_given_m
-      log_lik_prop <- calc_log_prob_m_given_h(m_prop, h)
+        # Do the accept/reject logic
+        if (!is.finite(log_lik_prop)) {
+            # Always reject the new sample if the associated log likelihood is not finite 
+            if (verbose) {
+                print('Not finite')
+            }
+            accept <- FALSE
+        } else {
+            # The log likelihood is finite. Calculate the acceptance parameter
+            # and randomly choose whether to accept the sample.
+            a <- min(1, exp(log_lik_prop - log_lik_curr))
+            if (verbose) {
+                print(a)
+            }
+            accept <- runif(1) < a
+        }
+        if (verbose) {
+            print(accept)
+        }
 
-      if (!is.finite(log_lik_prop)) {
-          if (verbose) {
-            print('Not finite')
-          }
-          accept <- FALSE
-      } else {
-          # Calculate the acceptance parameter
-          a <- min(1, exp(log_lik_prop - log_lik_curr))
-          if (verbose) {
-            print(a)
-          }
-          accept <- runif(1) < a
-      }
-      if (verbose) {
-        print(accept)
-      }
+        # Set th to equal th_prop if accept is TRUE
+        if (accept) {
+            m <- m_prop
+        }
 
-      if (accept) {
-          m <- m_prop
-      }
+        # Store the final samples for this iteration
+        TH[,n_mcmc] <- th
+        H [,n_mcmc]  <- h
+        M [,n_mcmc]  <- m
+        if (verbose) {
+            print(paste0('p_gb = ', m[1]))
+        }
+    }
 
-      TH[,n_mcmc] <- th
-      H [,n_mcmc]  <- h
-      M [,n_mcmc]  <- m
-      if (verbose) {
-        print(paste0('p_gb = ', m[1]))
-      }
-  }
+    if (assess_run_times) {
+        print('Run times of mask, th_given_h, and m_given_h')
+        print(t_mask)
+        print(t_th_given_h)
+        print(t_m_given_h)
+    }
 
-  if (assess_run_times) {
-      print('Run times of mask, th_given_h, and m_given_h')
-      print(t_mask)
-      print(t_th_given_h)
-      print(t_m_given_h)
-  }
-
-  # At least for now, do not thin
-  return(list(TH=TH,H=H,M=M))
+    # At least for now, do not apply the thinning
+    return(list(TH=TH,H=H,M=M))
 }
 
-# To fully take advantange of multiple cores, run each experiment inside a
-# standalone function, run_experiment.
 run_experiment <- function(p_gb,
                            a0,
                            kappa0,
-                           f0,
+                           TFR0,
                            N,
                            num_times,
                            rand_seed,
                            use_age,
                            verbose=FALSE) {
-  set.seed(rand_seed)
+    # Run one experiment. There are
+    # two fundamental steps:
+    #
+    # (a) create the known/true simulated data
+    # (b) run the Bayesian sampling algorithm.
+    #
+    # p_gb      -- The true probaiblity of transitioning from good to bad years  # TODO: this should be p_gb0
+    # a0        -- The true Siler parameter vector
+    # kappa0    -- The true mortality boost in famine/bad years
+    # TFR0      -- The true total fertility rate
+    # num_times -- The number of time periods to simulate
+    # rand_seed -- A random number seed
+    # use_age   -- Whether to use age-at-death observations in the likelihood calculation
 
-  # Create simulated data
-  P_g <- calc_P(a0, kappa0, FALSE)
-  F_g <- calc_F(f0, P_g)
-  P_b <- calc_P(a0, kappa0, TRUE)
-  F_b <- calc_F(f0, P_b)
+    # Set the random number seed for reproducibility
+    set.seed(rand_seed)
 
-  # For now, set th0 equal to the true parameter vector
-  # th has ordering [p_gb, a1, ..., a5, kappa, f]
-  th0 <- c(a0, kappa0, f0)
-  m0 <- p_gb
-  # Use th0 / 20 as the scale for the proposal distribution in MCMC sampling
-  # dividing by 5 seems about right for small sample sizes
-  # dividing by 10 seems about right for N=100
-  th_scale <- th0 / 10
-  m_scale <- m0 / 10
+    # Create simulated data
+    P_g <- calc_P(a0, kappa0, FALSE)
+    F_g <- calc_F(TFR0, P_g)
+    P_b <- calc_P(a0, kappa0, TRUE)
+    F_b <- calc_F(TFR0, P_b)
 
-  famine_mask_known <- sample_famine_mask(p_gb, num_times)
-  pop_size_known <- calc_pop_size(P_g, F_g, P_b, F_b,
+    # Build the full, simulation parameter vectors
+    # th has ordering [a1, ..., a5, kappa, TFR]
+    th0 <- c(a0, kappa0, TFR0)
+    m0 <- p_gb
+    # Use th0 / 10 as the scale for the proposal distribution in MCMC sampling
+    # dividing by 5 seems about right for small sample sizes
+    # dividing by 10 seems about right for N=100. Using th0 to set the scale
+    # should improve sampling for now (which is just a conveneince), but will not
+    # be possible with an actual dataset.
+    th_scale <- th0 / 10
+    m_scale <- m0 / 10
+
+    # Create a simulated, true (known) famine mask
+    famine_mask_known <- sample_famine_mask(p_gb, num_times)
+    # Create the simulated, true (known) population objects
+    pop_size_known <- calc_pop_size(P_g, F_g, P_b, F_b,
                                   famine_mask_known, return_aad_prob=use_age)
-  if (use_age) {
-      aad_prob_known <- pop_size_known$aad_prob
-      pop_size_known <- pop_size_known$pop_size
-      Nage <- round(N*.1) # Assume 1 skeleton for 10 radiocarbon dates
-  }
-  # Normalize the population size to sum to 1
-  # dtau is 1, so pop_size_known  and M have the correct normalizations.
-  # pop_size_known is the same as v in the JAS article.
-  pop_size_known <- pop_size_known / sum(pop_size_known)
-  true_calendar_dates <- sample(length(pop_size_known),
-                                       N,
-                                       replace=T,
-                                       prob=pop_size_known)
-  # Make the dates calendar dates, AD
-  start_date <- 600
-  true_calendar_dates <- true_calendar_dates + start_date - 1
-  rc_meas <-
-    draw_rc_meas_using_date(true_calendar_dates,
-                            calib_df,
-                            error_spec,
-                            is_AD=TRUE)
-  tau <- seq(start_date, start_date + num_times -1)
-  meas_matrix <- calc_meas_matrix(tau, rc_meas$phi_m, rc_meas$sig_m, calib_df)
-  if (use_age) {
-    aad_vect_known <- sample(length(aad_prob_known),
-                         Nage,
-                         replace=T,
-                         prob=aad_prob_known)
-  } else {
-      aad_vect_known <- c()
-  }
-  samp_obj <- sample_param_vector(th0,
-                                  m0,
-                                  rc_meas,
-                                  calib_df,
-                                  tau,
-                                  num_famine_samps,
-                                  meas_matrix,
-                                  th_scale,
-                                  m_scale,
-                                  aad_vect_known,
-                                  verbose=verbose)
+    if (use_age) {
+        aad_prob_known <- pop_size_known$aad_prob
+        pop_size_known <- pop_size_known$pop_size
+        Nage <- round(N*.1) # Assume 1 skeleton for 10 radiocarbon dates
+    }
+    # Normalize the population size to sum to 1
+    # dtau is 1, so pop_size_known  and M have the correct normalizations.
+    # pop_size_known is the same as v in the JAS article.
+    pop_size_known <- pop_size_known / sum(pop_size_known)
 
-  sim_info <- list(th_known=th0,
-                   m_known=m0,
-                   h_known=famine_mask_known,
-                   true_calendar_dates=true_calendar_dates,
-                   pop_size_known=pop_size_known,
-                   rc_meas=rc_meas,
-                   tau=tau,
-                   aad_vect_known=aad_vect_known)
-  return(list(sim_info=sim_info, samp_obj=samp_obj))
+    # Sample the simulated, true (known) calendar dates for the radiocarbon samples
+    true_calendar_dates <- sample(length(pop_size_known),
+                                         N,
+                                         replace=T,
+                                         prob=pop_size_known)
+    # Make the dates calendar dates, AD
+    start_date <- 600
+    true_calendar_dates <- true_calendar_dates + start_date - 1
+    # Sample the radiocarbon measurements, which accounts for measurement
+    # uncertainty and the radiocarbon calibration curve.
+    rc_meas <- draw_rc_meas_using_date(true_calendar_dates,
+                                       calib_df,
+                                       error_spec,
+                                       is_AD=TRUE)
+    # Create the time grid vector, tau
+    tau <- seq(start_date, start_date + num_times -1)
+    # Calculate the measurement matrix, M
+    meas_matrix <- calc_meas_matrix(tau, rc_meas$phi_m, rc_meas$sig_m, calib_df)
+    if (use_age) {
+        # If necessary, sample the simulated, true (known) ages-at-death
+        aad_vect_known <- sample(length(aad_prob_known),
+                                 Nage,
+                                 replace=T,
+                                 prob=aad_prob_known)
+    } else {
+        aad_vect_known <- c()
+    }
+    
+    # Do the actual sampling
+    samp_obj <- sample_param_vector(th0,
+                                    m0,
+                                    rc_meas,
+                                    calib_df,
+                                    tau,
+                                    num_famine_samps,
+                                    meas_matrix,
+                                    th_scale,
+                                    m_scale,
+                                    aad_vect_known,
+                                    verbose=verbose)
+  
+    # Create the return object list and return it
+    sim_info <- list(th_known=th0,
+                     m_known=m0,
+                     h_known=famine_mask_known,
+                     true_calendar_dates=true_calendar_dates,
+                     pop_size_known=pop_size_known,
+                     rc_meas=rc_meas,
+                     tau=tau,
+                     aad_vect_known=aad_vect_known)
+    return(list(sim_info=sim_info, samp_obj=samp_obj))
 }
 
 exp_wrapper <- function(prob) {
+  # A wrapper to run the "experiment" / simulation and calculate success
+  # for this experiment
+  #
+  # prob -- The problem, which is a list of values specifying this experiment
   print(paste0('Starting problem ', prob$counter, ' of ', prob$num_prob))
+  # Run the actual experiment
   exp_obj <- run_experiment(prob$p_gb,
                             prob$a0,
                             prob$kappa0,
-                            prob$f0,
+                            prob$TFR0,
                             prob$N,
                             prob$num_times,
                             prob$seed,

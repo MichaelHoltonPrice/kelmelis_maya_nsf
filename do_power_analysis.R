@@ -18,7 +18,7 @@ analysis_name <- gsub(":", "-", analysis_name)
 # 1. Set the true values
 
 # The true total fertiltiy rate is 5 (half of babies are female)
-f0 <- 5
+TFR0 <- 5
 
 # The true Siler parameter vector is from Gage and Dyke (1986), table TBD
 a0 <- c(0.175,1.40,0.368*0.01,0.075*0.001,0.917*0.1)
@@ -91,7 +91,7 @@ for (k1 in 1:length(N_vect)) {
       prob <- list(p_gb=p_gb,
                    a0=a0,
                    kappa0=kappa0,
-                   f0=f0,
+                   TFR0=TFR0,
                    N=N,
                    num_times=num_times,
                    use_age=use_age,
@@ -136,7 +136,3 @@ pdf('power_curve.pdf')
   plot(N_vect, power_vect_no_age, xlab='N', ylab='Power', ylim=c(0,y_max), col='black')
   points(N_vect, power_vect_age, col='red')
 dev.off()
-
-
-#exp_obj_no_age <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 100, FALSE)
-#exp_obj_age <- run_experiment(p_gb, a0, kappa0, f0, N, num_times, 100, TRUE)
