@@ -726,6 +726,14 @@ exp_wrapper <- function(prob) {
 }
 
 plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
+  # Plot the power calculation success probabilities. One curve is added for
+  # experiments with just radiocarbon dates and another for experiments with
+  # both radiocarbon dates and skeletal samples.
+  #
+  # analysis_name -- The name of the analysis to plot
+  # N_vect        -- The vector of samples sizes to included in the plot
+  # exp_per_n     -- The number of experiments for each sample size
+  #
   # Get all files in the data directory
   files <- list.files('data')
 
@@ -734,43 +742,48 @@ plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
   files <- files[ind]
 
   # Extract the counter (i.e., experiment number within this analysis)
-  counter_vect <-
+  exp_number_vect <-
     unlist(lapply(files,
                   function(f){as.numeric(strsplit(strsplit(f,'_')[[1]][2],
                                                            '\\.')[[1]][1])}))
+  # Initialize the array to store success outcomes and the counter
   success_array <- array(NA,dim=c(length(N_vect), exp_per_N, 2))
   counter <- 0
+
+  # Iterate over samples sizes, experiments, and the use_age flag
   for (k1 in 1:length(N_vect)) {
+    # Extract N, the sample size
     N <- N_vect[k1]
     for (k2 in 1:exp_per_N) {
       for (k3 in 1:2) {
+        # Increment the counter. The even/odd parity of the counter
+        # indicates whether use_age is FALSE or TRUE, so we can use k3
+        # to populate success_array.
         counter <- counter + 1
-        if (counter %in% counter_vect) {
+        if (counter %in% exp_number_vect) {
           file_path <- file.path('data',
                                  paste0(analysis_name,'_',counter,'.rds'))
           result <- readRDS(file_path)
-          print('----')
-          print(counter)
           success_array[k1, k2, k3] <- result$success
-          if (k3 == 2) {
-            print(result$success)
-          }
         }
       }
     }
   }
   
+  # Build the power calculation success probability vectors
   power_vect_no_age <- rep(NA, length(N_vect))
   power_vect_age    <- rep(NA, length(N_vect))
   for (k1 in 1:length(N_vect)) {
     outcomes_no_age <- success_array[k1,,1]
-    outcomes_no_age <- outcomes_no_age[!is.na(outcomes_no_age)]
+    outcomes_no_age <- outcomes_no_age[!is.na(outcomes_no_age)] # so the plot works even if not all experiments have finished
     outcomes_age    <- success_array[k1,,2]
-    outcomes_age    <- outcomes_age[!is.na(outcomes_age)]
+    outcomes_age    <- outcomes_age[!is.na(outcomes_age)]  # so the plot works even if not all experiments have finished
     power_vect_no_age[k1] <- sum(outcomes_no_age) / length(outcomes_no_age)
     power_vect_age   [k1] <- sum(outcomes_age) / length(outcomes_age)
   }
    
+  # Make the actual plot, which has two x-axes: one for radiocarbon dates (N)
+  # and the other for skeletal samples (round(N/10)).
   y_max <- max(power_vect_no_age, power_vect_age, na.rm=TRUE)
   pdf(paste0('power_curve_',analysis_name,'.pdf'))
     plot(N_vect,

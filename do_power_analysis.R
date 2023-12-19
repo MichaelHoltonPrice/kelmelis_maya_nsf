@@ -176,21 +176,7 @@ a0 <- c(0.175,1.40,0.368*0.01,0.075*0.001,0.917*0.1)
 # The true boost to mortality is kappa = .2 (a 20% increase)
 kappa0 <- .2
 
-# The final model parameter is the probability of transitioning from a
-# non-famine to a famine year, which is half the probabilty of transitioning
-# from a famine to a famine year. We call this parameter p_gb (or p_gb0 for the
-# true, simulated value). The transition matrix is
-#
-# [1 -   p_gb,   p_gb]
-# [1 - 2*p_gb, 2*p_gb]
-#
-# where the first state is the good (non-famine) state. Put slightly differently,
-# the individual transition probabilities are
-#
-# non-famine -->     famine   p_gb
-# non-famine --> non-famine   1 - p_gb
-#     famine -->     famine   2*p_gb
-#     famine --> non-famine   1 - 2*p_gb
+# The probability of good to bad transitions is 0.2
 p_gb <- .2 # TODO: this should be called p_gb0 for consistency with the other true values
 
 # 2. Run the experiments/simulations
@@ -213,7 +199,7 @@ tau <- seq(start_date, start_date + num_times -1)
 # power_analysis_functions.R for what constitutes success. For the
 # simulations that include age-at-death observations, we utilize N/10
 # skeletons with an age-at-death estimate for every radiocarbon samples.
-N_vect <- 100*2^(0:5)
+N_vect <- 100*2^(0:6)
 
 # We run 400 simulations for each value of the sample size so that we
 # can estimate the success probability.
@@ -264,25 +250,4 @@ t1 <- Sys.time()
 stopImplicitCluster()
 
 # 3. Plots the results
-# Now that all experiments have finished, extract the success metrics. 
-success_array <- array(NA,dim=c(length(N_vect), exp_per_N, 2))
-counter <- 0
-for (k1 in 1:length(N_vect)) {
-  N <- N_vect[k1]
-  for (k2 in 1:exp_per_N) {
-    for (k3 in 1:2) {
-      counter <- counter + 1
-      success_array[k1, k2, k3] <- success_vect[counter]
-    }
-  }
-}
-
-# Plot the success probabilities (statistical power)
-power_vect_no_age <- rowSums(success_array[,,1]) / ncol(success_array[,,1])
-power_vect_age    <- rowSums(success_array[,,2]) / ncol(success_array[,,2])
-
-y_max <- max(power_vect_no_age, power_vect_age)
-pdf('power_curve.pdf')
-  plot(N_vect, power_vect_no_age, xlab='N', ylab='Power', ylim=c(0,y_max), col='black')
-  points(N_vect, power_vect_age, col='red')
-dev.off()
+plot_analysis(analysis_name, N_vect, exp_per_N)
