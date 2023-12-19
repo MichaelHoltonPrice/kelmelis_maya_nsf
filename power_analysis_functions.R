@@ -1,54 +1,97 @@
-# TODO: consider making the number of age classes an input rather than hard
-#       coding it
 calc_P <- function(a, kappa, is_famine) {
-    #x <- 0:99
+    # Calculate the age-specifc survival probabilities (the off-diagonal of the
+    # population projection matrix)
+    # a         -- The Siler parameter vector
+    # kappa     -- The additional boost to mortality in famine years (likely 0.2)
+    # is_famine -- Is this a famine year?
+
+    # Create a vector of ages from 0 to 79 years
     x <- 0:79
+    # Calculate the cumulative hazard
     cum_haz <- a[1]/a[2]*(1 - exp(-a[2]*x)) + a[3]*x - a[4]/a[5]*(1 - exp(a[5]*x))
+
     if (is_famine) {
+        # During a famine year, both the hazard and cumulative hazard are
+        # (1 + kappa) larger
         cum_haz <- cum_haz * (1 + kappa)
     }
-    # The
+    # Calculate survival from age 0 to age x from the cumulative hazard
     l_of_x <- exp(-cum_haz)
 
-    # Calculate the survival probability, P
-    #P <- l_of_x[2:100] / l_of_x[1:99]
+    # The survival probability from the beginning to end of a time period is
+    # calculated from the ratio of the l_of_x values.
     P <- l_of_x[2:80] / l_of_x[1:79]
 
     return(P)
 }
 
-calc_F <- function(f, P) {
-    # Use 15 as the age of first reproduction (F1 to F14 are zero)
-    # Use 45 as the age at last reproduction and normalize so that the number
-    # of offspring sum to f
-    # In addition, account for mortality over each time period in weighting the
-    # fertility
+calc_F <- function(TFR, P) {
+    # Calculate the age-specific fertilities (the top row of the population
+    # projection matrix)
+    # TFR -- The total fertility rate (TFR)
+    # P -- The vector of age-specific survival probabilities
+    #
+    # The total fertility rate (TFR) is the mean number of children a woman
+    # would have in the absence of mortality. This is not just the sum of
+    # the age-specific fertilities, F, since these values account for
+    # age-specific mortality. Equation 3.3.13 in Keyfitz and Caswell (2005)
+    # gives the following approximate formula that relates instantaneous,
+    # age-specific fertility (m_i) to F_i [we use the symbol m differently
+    # below in the rest of the code base]:
+    #
+    # F_i = l(0.5) * (m_i + P_i * m_{i+1}) / 2,
+    #
+    # where l(0.5) is instant survival half way through the first age period. The
+    # TFR is the sum of these m_i values. We make some further approximations to
+    # keep the model simple. In particular, we assume that:
+    #
+    # (a) l(0.5) is close to 1
+    # (b) m_i is constant across age classes
+    # (c) (1 + P_i)/2 is approximately P_i
+    #
+    # Given these assumptions, the relationship simplifies to
+    #
+    # F_i = m P_i
+    #
+    # Aside from the preceding considerations, the population projection matrix
+    # only tracks female births, so we must divide by 2. We also assume that the
+    # reproductive span is 15 to 45 years.
+
+    # Initialize F_ with the correct relative values (proportional to P_i)
     F_ <- P[15:45] # Here and elsewhere, use F_ rather than F since F is FALSE
+
+    # Normalize F_ to yield the desired TFR
     F_ <- F_ / sum(F_)
-    F_ <- F_ * f / 2 # divide by two to track females
-    #F_ <- c(rep(0,14), F_, rep(0,55))
+    F_ <- F_ * TFR / 2 # divide by two to track just females
+
+    # Build out the full vector, with 0 values included
     F_ <- c(rep(0,14), F_, rep(0,35))
     return(F_)
 }
 
-#build_A <- function(P, F_) {
-#    N <- length(P) + 1
-#    A <- matrix(0, N, N)
-#    A[1,] <- F_
-#    for (n in 1:(N-1)) {
-#        A[n+1,n] <- P[n]
-#    }
-#    return(A)
-#}
-
 project_pop <- function(z, P, F_) {
+  # Project the population one timestep into the future
+  # z  -- The vector of population sizes by age
+  # P  -- The age-specific survival probabilities
+  # F_ -- The age-specific fertilities
   z_0 <- sum(z[15:45] * F_[15:45])
-  #return(c(z_0, z[1:99]*P))
   return(c(z_0, z[1:79]*P))
 }
 
 calc_pop_size <- function(P_g, F_g, P_b, F_b,
                           famine_mask, return_aad_prob=FALSE) {
+    # Calculate the population size given the population model for both
+    # good and bad years (P_g, F_g, P_b, and F_b) and the mask of actual
+    # famine years.  If return_aad_prob is TRUE, also calculate and
+    # return the age at death values across time periods (aad stands
+    # for age at death)
+    #
+    # P_g -- The age-specific survival probabilities for good/non-famine years
+    # F_g -- The age-specific fertilities for good/non-famine years
+    # P_b -- The age-specific survival probabilities for bad/famine years
+    # F_b -- The age-specific fertilities for bad/famine years
+    # famine_mask -- True if a year is bad/famine and False otherwise
+
     # For now, use something of a kleuge to get the starting age structure by
     # first getting the age structure after multiplying the entire sequence
     # of matrices out, starting with a uniform age structure (this requires two
@@ -141,18 +184,24 @@ calc_pop_size <- function(P_g, F_g, P_b, F_b,
 }
 
 sample_famine_mask <- function(p_gb, num_periods) {
+  # Create a sampled famine mask
+  # p_gb        -- The probability of transitioning from a good to bad year
+  # num_periods -- The numper of periods (years) to sample
   H <- matrix(NA,2,2)
   H[1,1] <- 1 -   p_gb
   H[1,2] <-       p_gb
   H[2,1] <- 1 - 2*p_gb
   H[2,2] <-     2*p_gb
 
-  # The overall probability is the dominant left eigenvector, normalized to
-  # sum to 1
+  # First, sample from the overall probabilities of good and bad years to set
+  # the mask for the first year. This overall probability is the dominant left
+  # eigenvector of the matrix H, normalized to sum to 1.
   w0 <- eigen(t(H))$vectors[,1]
   w0 <- w0 / sum(w0)
   famine_mask <- sample(c(F,T), 1, replace=FALSE, prob=w0)
 
+  # Now that we've initialized the mask for the first year, use the transition
+  # probabilities to sample the mask for the remaining years.
   for (n in 2:num_periods) {
       if(famine_mask[n-1]) {
           # Last year was a famine
@@ -167,136 +216,142 @@ sample_famine_mask <- function(p_gb, num_periods) {
 }
 
 is_th_valid <- function(th) {
+    # Is the input the vector valid? Each element of th must be positive
+    # th -- The parameter vector
     return(!any(th <= 0))
 }
 
-# Calculate the negative log-likelihood
-# th has ordering [p_gb, a1, ..., a5, kappa, f]
 calc_log_prob_th_given_h <- function(th,
                                      h, # the famine mask
                                      meas_matrix,
                                      aad_vect=c()) {
-  use_age <- length(aad_vect) != 0
-  # Extract parameters
-  a1    <- th[1]
-  a2    <- th[2]
-  a3    <- th[3]
-  a4    <- th[4]
-  a5    <- th[5]
-  kappa <- th[6]
-  f     <- th[7]
+    # Calculate the probability of th given a known famine mask, h
+    # th          -- The parameter vector, [a1, ..., a5, kappa, TFR]
+    # h           -- The famine mask (TRUE if a year is bad and FALSE otherwise)
+    # meas_matrix -- The measurement matrix for the radiocarbon samples
+    use_age <- length(aad_vect) != 0
+    # Extract parameters
+    a1    <- th[1]
+    a2    <- th[2]
+    a3    <- th[3]
+    a4    <- th[4]
+    a5    <- th[5]
+    kappa <- th[6]
+    TFR   <- th[7]
+    a <- th[1:5]
 
-  # TODO: ensure parameter vector is valid
-  if (!is_th_valid(th)) {
-      return(-Inf)
-  }
-   
-  a <- th[1:5]
-
-  # For the mortality, some parameterizations with very small values of the
-  # mortality hazard at high ages evaluate to NaN. Return Inf if this happens.
-  # Do the same for F_g in case I am forgetting an edge case.
-  P_g <- calc_P(a, kappa, FALSE)
-  if (any(is.na(P_g))) {
-    return(Inf)
-  }
-  F_g <- calc_F(f, P_g)
-  # TODO: consider whether this should throw an error
-  if (any(is.na(F_g))) {
-    return(Inf)
-  }
-  P_b <- calc_P(a, kappa, TRUE)
-  if (any(is.na(P_b))) {
-    return(Inf)
-  }
-  F_b <- calc_F(f, P_b)
-  # TODO: consider whether this should throw an error
-  if (any(is.na(F_g))) {
-    return(Inf)
-  }
-
-  pop_size <- calc_pop_size(P_g, F_g, P_b, F_b, h, return_aad_prob=use_age)
-  if (use_age) {
-    aad_prob <- pop_size$aad_prob
-    pop_size <- pop_size$pop_size
-  }
-  v <- pop_size/ sum(pop_size)
-  lik_vect <- meas_matrix %*% v
-  log_lik <- sum(log(lik_vect))
-  if (use_age) {
-    for (k in 1:length(aad_vect)) {
-      ind_age <- aad_vect[k]
-      log_lik <- log_lik + log(aad_prob[ind_age])
+    # Check that the parameter vector is valid. If not, return -Inf, which leads
+    # to the corresponding sample being rejected.
+    if (!is_th_valid(th)) {
+        return(-Inf)
     }
-  }
-  return(log_lik)
-}
+  
+    # For the mortality, some parameterizations with very small values of the
+    # mortality hazard at high ages evaluate to NaN. Return Inf if this happens.
+    # Do the same for F_g in case I am forgetting an edge case.
+    P_g <- calc_P(a, kappa, FALSE) # age-specific survival probabilities good years
+    if (any(is.na(P_g))) {
+      return(Inf)
+    }
+    F_g <- calc_F(f, P_g) # age-specific fertilities good years
+    if (any(is.na(F_g))) {
+      return(Inf)
+    }
+    P_b <- calc_P(a, kappa, TRUE) # age-specific survival probabilities bad years
+    if (any(is.na(P_b))) {
+      return(Inf)
+    }
+    F_b <- calc_F(f, P_b) # age-specific fertilities bad years
+    if (any(is.na(F_g))) {
+      return(Inf)
+    }
+  
+    # Calculate the population size (including the age-at-death vectors, if
+    # necessary) given the demographic rates and mask of famine years.
+    pop_size <- calc_pop_size(P_g, F_g, P_b, F_b, h, return_aad_prob=use_age)
+    if (use_age) {
+      aad_prob <- pop_size$aad_prob
+      pop_size <- pop_size$pop_size
+    }
+    
+    # Apply the likelihood function for the radiocarbon dates (v is the same as
+    # in Price et al. 2021 -- End-to-end Bayesian analysis for summarizing sets
+    # of radiocarbon dates).
+    v <- pop_size/ sum(pop_size)
+    lik_vect <- meas_matrix %*% v
+    log_lik <- sum(log(lik_vect))
 
-calc_markov_probs <- function(p_gb) {
-  H <- matrix(NA,2,2)
-  H[1,1] <- 1 -   p_gb
-  H[1,2] <-       p_gb
-  H[2,1] <- 1 - 2*p_gb
-  H[2,2] <-     2*p_gb
-
-  # The overall probability is the dominant left eigenvector, normalized to
-  # sum to 1
-  w0 <- eigen(t(H))$vectors[,1]
-  w0 <- w0 / sum(w0)
-  return(w0)
+    # If necessary, use ages-at-death in the likelihood calculation
+    if (use_age) {
+      for (k in 1:length(aad_vect)) {
+        ind_age <- aad_vect[k]
+        log_lik <- log_lik + log(aad_prob[ind_age])
+      }
+    }
+    return(log_lik)
 }
 
 calc_log_prob_m_given_h <- function(m, h) {
-  p_gb <- m[1]
-  if (p_gb <= 0) {
-      return(Inf)
-  }
+    # Calculate the log likelihood of the parameter m given actual/sampled hidden
+    # states h. m has only one entry, p_gb = m[1], but for more complicated hidden
+    # markov models would include more terms.
 
-  if (p_gb >= 0.5) {
-      return(Inf)
-  }
+    # p_gb cannot be negative
+    p_gb <- m[1]
+    if (p_gb <= 0) {
+        return(Inf)
+    }
+  
+    # p_gb cannot be greater than 0.5
+    if (p_gb >= 0.5) {
+        return(Inf)
+    }
+  
+    # Create a matrix of transition probabilities, H (unrelated to little h),
+    # so we can calculate the stable probabilities of good and bad years
+    H <- matrix(NA,2,2)
+    H[1,1] <- 1 -   p_gb
+    H[1,2] <-       p_gb
+    H[2,1] <- 1 - 2*p_gb
+    H[2,2] <-     2*p_gb
+  
+    # The overall probability of good versus bad years is calculated from the dominant
+    # left eigenvector of H (normalized to sum to 1)
+    w0 <- eigen(t(H))$vectors[,1]
+    w0 <- w0 / sum(w0)
 
-  H <- matrix(NA,2,2)
-  H[1,1] <- 1 -   p_gb
-  H[1,2] <-       p_gb
-  H[2,1] <- 1 - 2*p_gb
-  H[2,2] <-     2*p_gb
+    # Calculate the contribution of the first entry to the log likelihood
 
-  # The overall probability is the dominant left eigenvector, normalized to
-  # sum to 1
-  w0 <- eigen(t(H))$vectors[,1]
-  w0 <- w0 / sum(w0)
+    if (h[1]) {
+        # Initial period is famine
+        log_lik <- log(w0[2])
+    } else {
+        # Initial period is not famine
+        log_lik <- log(w0[1])
+    }
 
-  if (h[1]) {
-    # Initial period is famine
-    log_lik <- log(w0[2])
-  } else {
-    # Initial period is not famine
-    log_lik <- log(w0[1])
-  }
-
-  num_periods <- length(h)
-
-  for (n in 2:num_periods) {
-      if(h[n-1]) {
-          if (h[n]) {
-            # Famine then Famine
-            log_lik <- log_lik + log(2*p_gb)
-          } else {
-            # Famine then not Famine
-            log_lik <- log_lik + log(1 - 2*p_gb)
-          }
-      } else {
-          if (h[n]) {
-            # Not Famine then Famine
-            log_lik <- log_lik + log(p_gb)
-          } else {
-            # Not Famine then Not Famine
-            log_lik <- log_lik + log(1 - p_gb)
-          }
-      }
-  }
-  return(log_lik)
+    # Iterate over the remaning time periods to calculate the log likelihoods
+    num_periods <- length(h)
+    for (n in 2:num_periods) {
+        if(h[n-1]) {
+            if (h[n]) {
+                # Famine then Famine
+                log_lik <- log_lik + log(2*p_gb)
+            } else {
+                # Famine then not Famine
+                log_lik <- log_lik + log(1 - 2*p_gb)
+            }
+        } else {
+            if (h[n]) {
+                # Not Famine then Famine
+                log_lik <- log_lik + log(p_gb)
+            } else {
+                # Not Famine then Not Famine
+                log_lik <- log_lik + log(1 - p_gb)
+            }
+        }
+    }
+    return(log_lik)
 }
 
 # Sample from the posterior distribution of the parameter vector
@@ -599,32 +654,6 @@ exp_wrapper <- function(prob) {
   return(success)
 }
 
-#plot_sample_n <- function(exp_obj, n) {
-#  th <- exp_obj$samp_obj$TH[,1]
-#  a <- th[1:5]
-#  kappa <- th[6]
-#  f     <- th[7]
-#
-#  start_date <- 600 # AD 600 is the first date
-#  tau <- exp_obj$sim_info$tau
-#
-#  P_g <- calc_P(a, kappa, FALSE)
-#  F_g <- calc_F(f, P_g)
-#  P_b <- calc_P(a, kappa, TRUE)
-#  F_b <- calc_F(f, P_b)
-#
-#  h <- exp_obj$samp_obj$H[,n]
-#  v<- calc_pop_size(P_g, F_g, P_b, F_b, h)
-#  v <- v / sum(v)
-#
-#  v_known <- exp_obj$sim_info$pop_size_known
-#  ymax <- max(v, v_known)
-#  pdf(paste0('plot_', n, '.pdf'))
-#    plot(tau, v_known, col='green', type='l', lwd=3, ylim=c(0,ymax))
-#    lines(tau, v, col='black', lwd=3)
-#  dev.off()
-#} 
-
 plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
   # Get all files in the data directory
   files <- list.files('data')
@@ -651,8 +680,6 @@ plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
           result <- readRDS(file_path)
           print('----')
           print(counter)
-          #print(counter)
-          #print(result)
           success_array[k1, k2, k3] <- result$success
           if (k3 == 2) {
             print(result$success)
