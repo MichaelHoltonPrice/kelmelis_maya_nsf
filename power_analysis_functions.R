@@ -253,7 +253,7 @@ calc_log_prob_th_given_h <- function(th,
     if (any(is.na(P_g))) {
       return(Inf)
     }
-    F_g <- calc_F(f, P_g) # age-specific fertilities good years
+    F_g <- calc_F(TFR, P_g) # age-specific fertilities good years
     if (any(is.na(F_g))) {
       return(Inf)
     }
@@ -261,7 +261,7 @@ calc_log_prob_th_given_h <- function(th,
     if (any(is.na(P_b))) {
       return(Inf)
     }
-    F_b <- calc_F(f, P_b) # age-specific fertilities bad years
+    F_b <- calc_F(TFR, P_b) # age-specific fertilities bad years
     if (any(is.na(F_g))) {
       return(Inf)
     }
