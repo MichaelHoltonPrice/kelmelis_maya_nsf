@@ -39,17 +39,21 @@ for (i in 1:num_parts) {
 }
 age_marginal <- age_marginal / sum(age_marginal)
 
+# Create the age_at_death_density plot (rotated 90 degrees and spanning 3.5 to 1.5 on the y-axis)
+y_vect <- seq(3.5, 1.5, len=length(age_at_death_density)) # This replaces the age vector
+age_death_plot <- ggplot() +
+  geom_line(aes(x = age_at_death_density, y = y_vect)) +
+  theme_void() +  # Removes axes, labels, and background
+  ylim(0.5, 4.5) +
+  coord_fixed(ratio = 1)
+
+
 # Make the joint probability from the two marginals
-joint_probability <- outer(pop_size_marginal, age_marginal)
+joint_probability <- outer(pop_size_marginal, rev(age_marginal))
 
 # Create the population_size plot
 population_plot <- ggplot() +
   geom_line(aes(x = tau, y = population_size)) +
-  theme_void()  # Removes axes, labels, and background
-
-# Create the age_at_death_density plot (rotated 90 degrees)
-age_death_plot <- ggplot() +
-  geom_line(aes(x = age_at_death_density, y = -age_groups)) +
   theme_void()  # Removes axes, labels, and background
 
 # Create a text grid with shape 1 x 4 for the population size marginal data
@@ -69,7 +73,7 @@ pop_size_marginal_grid_plot <- ggplot(pop_size_marginal_df, aes(x = x, y = y, la
 
 # Transform the joint probability matrix into a data frame
 joint_prob_df <- expand.grid(x = 1:num_parts, y = 1:num_parts)
-joint_prob_df$label <- round(as.vector(joint_probability), 2)
+joint_prob_df$label <- sprintf("%.2f", as.vector(joint_probability))
 
 # Create a 4x4 grid plot for the joint probability data
 joint_probability_grid_plot <- ggplot(joint_prob_df, aes(x = x, y = y, label = label)) +
