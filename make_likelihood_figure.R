@@ -58,7 +58,7 @@ age_death_plot <- ggplot() +
     panel.grid = element_blank(),   # Remove grid lines
     axis.text.y = element_text(angle = -90),  # Rotate y-axis labels by -90 degrees
     axis.title.y = element_text(angle = -90, size = 12, face = "bold", 
-                                vjust = 0.5)
+                                vjust = 0.5),
                                 #vjust = 0.5, margin = margin(t = 0, r = 20, b = 0, l = 0))  # Move y-axis title to the right
   ) +
   scale_y_continuous(breaks = mapped_y_breaks, labels = as.character(y_breaks)) +
@@ -70,18 +70,7 @@ joint_probability <- outer(pop_size_marginal, rev(age_marginal))
 # Create the population_size plot
 population_plot <- ggplot() +
   geom_line(aes(x = tau, y = population_size)) +
-  theme_minimal() +  # Use a minimal theme
-  theme(
-    axis.title = element_blank(),  # Remove axis titles
-    axis.text.y = element_blank(),  # Remove y-axis text
-    axis.ticks.y = element_blank(),  # Remove y-axis ticks
-    panel.grid = element_blank()  # Remove grid lines
-  ) +
-  scale_x_continuous(breaks = seq(600, 1000, by = 100),    # Set custom breaks at 100-year intervals
-                     labels = seq(600, 1000, by = 100)) +  # Labels for the breaks
-  labs(x = "Calendar Date [AD]") +
-  theme(axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 10, b = 10)))
-
+  theme_void()
 
 # Create a text grid with shape 1 x 4 for the population size marginal data
 pop_size_marginal_df <- data.frame(
@@ -90,11 +79,25 @@ pop_size_marginal_df <- data.frame(
   label = round(pop_size_marginal, 2)
 )
 
+label_df <- data.frame(
+  x = seq(0.5, 4.5, length.out = 5),  # Positions for 5 labels
+  y = rep(5.0, 5),  # Constant y position for all labels
+  label = seq(600, 1000, by = 100)  # Labels from 600 to 1000
+)
+
+axis_df <- data.frame(
+  x = c(2.5),
+  y = c(5.5),
+  label = 'Calendar Date [AD]'
+)
+
 pop_size_marginal_grid_plot <- ggplot(pop_size_marginal_df, aes(x = x, y = y, label = label)) +
   geom_tile(color = "black", fill = "white", size = 0.5) +  # Draw squares with boundaries
-  geom_text() +  # Add text labels
+  geom_text() +  # Add text labels within the squares
+  geom_text(data = label_df, size=3, aes(x = x, y = y, label = label), vjust = 0) +  # Add year labels above the grid lines using separate data frame
+  geom_text(data = axis_df, size=6, aes(x = x, y = y, label = label), vjust = 0) +  # Add an axis label
   theme_void() +  # Removes axes, labels, and background
-  xlim(0.5, 4.5) + ylim(0.5, 4.5) +  # Adjust limits to fit the 4x4 grid
+  xlim(0.5, 4.5) + ylim(0.5, 5.5) +  # Adjust limits to fit the grid and labels
   coord_fixed(ratio = 1)  # Set aspect ratio to 1:1
 
 # Transform the joint probability matrix into a data frame
@@ -106,7 +109,9 @@ joint_probability_grid_plot <- ggplot(joint_prob_df, aes(x = x, y = y, label = l
   geom_tile(color = "black", fill = "white", size = 0.5) +  # Draw squares with boundaries
   geom_text() +  # Add text labels
   theme_void() +  # Removes axes, labels, and background
-  xlim(0.5, num_parts + 0.5) + ylim(0.5, num_parts + 0.5) +  # Set limits to enclose the squares properly
+  geom_text(data = label_df, size=3, aes(x = x, y = y, label = label), vjust = 0) +  # Add year labels above the grid lines using separate data frame
+  geom_text(data = axis_df, size=6, aes(x = x, y = y, label = label), vjust = 0) +  # Add an axis label
+  xlim(0.5, 4.5) + ylim(0.5, 5.5) +  # Set limits to enclose the squares properly
   coord_fixed(ratio = 1)  # Set aspect ratio to 1:1
 
 # Create a text plot for cell (1,1)
