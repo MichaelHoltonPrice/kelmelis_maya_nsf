@@ -39,8 +39,7 @@ for (i in 1:num_parts) {
 }
 age_marginal <- age_marginal / sum(age_marginal)
 
-
-
+## Create the age_at_death_density plot (rotated 90 degrees and spanning 3.5 to 1.5 on the y-axis)
 y_vect <- seq(3.5, 1.5, length.out = length(age_at_death_density))
 
 # Create breaks for the y-axis
@@ -57,39 +56,13 @@ age_death_plot <- ggplot() +
     axis.text.x = element_blank(),  # Remove x-axis text if not needed
     axis.ticks.x = element_blank(),  # Remove x-axis ticks if not needed
     panel.grid = element_blank(),   # Remove grid lines
-    axis.text.y = element_text(angle = -90)  # Rotate y-axis labels by 90 degrees
+    axis.text.y = element_text(angle = -90),  # Rotate y-axis labels by -90 degrees
+    axis.title.y = element_text(angle = -90, size = 12, face = "bold", 
+                                vjust = 0.5)
+                                #vjust = 0.5, margin = margin(t = 0, r = 20, b = 0, l = 0))  # Move y-axis title to the right
   ) +
-  scale_y_continuous(breaks = mapped_y_breaks, labels = as.character(y_breaks))
-
-
-
-
-
-
-## Create the age_at_death_density plot (rotated 90 degrees and spanning 3.5 to 1.5 on the y-axis)
-#y_vect <- seq(3.5, 1.5, len=length(age_at_death_density)) # This replaces the age vector
-#y_breaks <- seq(3.5, 1.5, len=5)
-##age_death_plot <- ggplot() +
-##  geom_line(aes(x = age_at_death_density, y = y_vect)) +
-##  theme_void() +  # Removes axes, labels, and background
-##  ylim(0.5, 4.5) +
-##  coord_fixed(ratio = 1)
-#
-#age_death_plot <- ggplot() +
-#  geom_line(aes(x = age_at_death_density, y = y_vect)) +
-#  #ylim(0.5, 4.5) +
-#  coord_fixed(ratio = 1) +
-#  theme_minimal() +  # Use a minimal theme
-#  theme(
-#    axis.title = element_blank(),  # Remove axis titles
-#    axis.text.y = element_blank(),  # Remove y-axis text
-#    axis.ticks.y = element_blank(),  # Remove y-axis ticks
-#    panel.grid = element_blank()  # Remove grid lines
-#  ) +
-#  scale_y_continuous(breaks = y_breaks,
-#                     labels = c("0", "20", "40", "60", "80"))  # Labels for the breaks
-
-
+  scale_y_continuous(breaks = mapped_y_breaks, labels = as.character(y_breaks)) +
+  labs(y = "Age [years]")  # Add y-axis label
 
 # Make the joint probability from the two marginals
 joint_probability <- outer(pop_size_marginal, rev(age_marginal))
@@ -107,7 +80,7 @@ population_plot <- ggplot() +
   scale_x_continuous(breaks = seq(600, 1000, by = 100),    # Set custom breaks at 100-year intervals
                      labels = seq(600, 1000, by = 100)) +  # Labels for the breaks
   labs(x = "Calendar Date [AD]") +
-  theme(axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = -25, b = 10)))
+  theme(axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 10, b = 10)))
 
 
 # Create a text grid with shape 1 x 4 for the population size marginal data
