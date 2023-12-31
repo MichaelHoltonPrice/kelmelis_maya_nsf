@@ -56,7 +56,7 @@ age_death_plot <- ggplot() +
 # Create a grid plot with squares for the population size marginal data
 pop_size_marginal_df <- data.frame(
   x = 1:4,
-  y = rep(1, 4),
+  y = rep(4, 4),
   label = round(pop_size_marginal, 2)
 )
 
@@ -64,7 +64,19 @@ pop_size_marginal_grid_plot <- ggplot(pop_size_marginal_df, aes(x = x, y = y, la
   geom_tile(color = "black", fill = "white", size = 0.5) +  # Draw squares with boundaries
   geom_text() +  # Add text labels
   theme_void() +  # Removes axes, labels, and background
-  xlim(0.5, 4.5) + ylim(0.5, 1.5) +  # Set limits to enclose the squares properly
+  xlim(0.5, 4.5) + ylim(0.5, 4.5) +  # Adjust limits to fit the 4x4 grid
+  coord_fixed(ratio = 1)  # Set aspect ratio to 1:1
+
+# Transform the joint probability matrix into a data frame
+joint_prob_df <- expand.grid(x = 1:num_parts, y = 1:num_parts)
+joint_prob_df$label <- round(as.vector(joint_probability), 2)
+
+# Create a 4x4 grid plot for the joint probability data
+joint_probability_grid_plot <- ggplot(joint_prob_df, aes(x = x, y = y, label = label)) +
+  geom_tile(color = "black", fill = "white", size = 0.5) +  # Draw squares with boundaries
+  geom_text() +  # Add text labels
+  theme_void() +  # Removes axes, labels, and background
+  xlim(0.5, num_parts + 0.5) + ylim(0.5, num_parts + 0.5) +  # Set limits to enclose the squares properly
   coord_fixed(ratio = 1)  # Set aspect ratio to 1:1
 
 # Creating spacers and empty plots
@@ -72,10 +84,10 @@ empty_plot <- plot_spacer()
 
 # Arrange the plots manually
 widths <- c(2, 1, 2, 1)  # Adjust the width of each column
-heights <- c(1, 1, 2)  # Adjust the height of each row
-layout <- empty_plot                  + empty_plot + empty_plot      + empty_plot +
-          population_plot             + empty_plot + population_plot + empty_plot +
-          pop_size_marginal_grid_plot + empty_plot + empty_plot      + age_death_plot +
+heights <- c(1, 1, 4)  # Adjust the height of each row
+layout <- empty_plot                  + empty_plot + empty_plot                  + empty_plot +
+          population_plot             + empty_plot + population_plot             + empty_plot +
+          pop_size_marginal_grid_plot + empty_plot + joint_probability_grid_plot + age_death_plot +
           plot_layout(widths = widths, heights = heights)
 
 # Define the file name and path for the output
