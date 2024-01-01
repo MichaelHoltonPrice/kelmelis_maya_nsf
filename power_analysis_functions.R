@@ -785,7 +785,7 @@ plot_analysis <- function(analysis_name, N_vect, exp_per_N) {
   # Make the actual plot, which has two x-axes: one for radiocarbon dates (N)
   # and the other for skeletal samples (round(N/10)).
   y_max <- max(power_vect_no_age, power_vect_age, na.rm=TRUE)
-  png(paste0('Fig2_power_curve_',analysis_name,'.png'))
+  pdf(paste0('Fig2_power_curve_',analysis_name,'.pdf'))
     plot(N_vect,
          power_vect_no_age,
          xlab='',
