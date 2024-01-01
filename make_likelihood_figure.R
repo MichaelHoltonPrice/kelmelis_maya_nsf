@@ -103,7 +103,7 @@ joint_prob_df$label <- sprintf("%.2f", as.vector(joint_probability))
 age_label_df <- data.frame(
   x = rep(4.5, 5),  # Position to the right of the grid
   y = 0.5:4.5,  # Y positions corresponding to the grid
-  label = c("0", "20", "40", "60", "80")  # Age labels
+  label = c("80", "60", "40", "20", "0")  # Age labels
 )
 
 joint_probability_grid_plot <- ggplot(joint_prob_df, aes(x = x, y = y, label = label)) +
