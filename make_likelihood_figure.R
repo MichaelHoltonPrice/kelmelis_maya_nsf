@@ -20,12 +20,14 @@ tau_marginal = seq(start_date, start_date + num_times, by=100)
 pop_size_marginal <- diff(w1 * pnorm(tau_marginal, mean=700, sd=25) + w2*pnorm(tau_marginal, mean=850, sd=50))
 pop_size_marginal <- pop_size_marginal / sum(pop_size_marginal)
 
-# Define parameters for age_at_death_density data
+# Define parameters for age density
+# In the thought experiment, the age density is for the living population,
+# but for our actual proposed model it will be skeletal age-at-death
 age_groups <- 0:80  # Age groups starting at 0
 
-# Decreasing exponential for age at death
+# Decreasing exponential for age density
 lambda_ <- 0.05  # Rate parameter for exponential distribution
-age_at_death_density <- exp(-lambda_ * age_groups)
+age_density <- exp(-lambda_ * age_groups)
 
 # Build the age_marginal from the longer vector with four cells
 num_parts <- 4
@@ -35,22 +37,27 @@ indices_per_part <- (length(age_groups) - 1) / num_parts
 for (i in 1:num_parts) {
   start_index <- (i - 1) * indices_per_part + 1
   end_index <- i * indices_per_part
-  age_marginal[i] <- sum(age_at_death_density[start_index:end_index])
+  age_marginal[i] <- sum(age_density[start_index:end_index])
 }
 age_marginal <- age_marginal / sum(age_marginal)
 
-## Create the age_at_death_density plot (rotated 90 degrees and spanning 3.5 to 1.5 on the y-axis)
-x_min <- 0
+## Create the age_density plot (rotated 90 degrees and spanning 3.5 to 1.5 on the y-axis)
+x_min <- 0.5
 x_max <- 1.5
-x <- age_at_death_density
+x <- age_density
 x_vect <- x_min + ((x - min(x)) * (x_max - x_min)) / (max(x) - min(x))
-y_vect <- seq(3.35, 1.05, length.out = length(age_at_death_density))
+y_vect <- seq(3.35, 1.05, length.out = length(age_density))
 
-age_death_plot <- ggplot() +
+age_plot <- ggplot() +
   geom_line(aes(x = x_vect, y = y_vect)) +
-  xlim(x_min, x_max) + ylim(0.5, 4.5) + 
+  xlim(0, x_max) + ylim(0.5, 4.5) + 
   coord_fixed(ratio = 1) +
   theme_void()
+
+age_plot <- age_plot +
+  annotate("text", x = 0, y = mean(y_vect), label = "Age [years]", 
+           angle = -90, hjust = 0.5, vjust = 0, size = 6)  # Add and position the age axis label
+
 
 # Make the joint probability from the two marginals
 joint_probability <- outer(pop_size_marginal, rev(age_marginal))
@@ -99,11 +106,6 @@ age_label_df <- data.frame(
   label = c("0", "20", "40", "60", "80")  # Age labels
 )
 
-age_axis_label_df <- data.frame(
-  x = 4.75,  # Position further right from the grid
-  y = 2.5,   # Middle position on the y-axis
-  label = "Age [years]"
-)
 joint_probability_grid_plot <- ggplot(joint_prob_df, aes(x = x, y = y, label = label)) +
   geom_tile(color = "black", fill = "white", size = 0.5) +  # Draw squares with boundaries
   geom_text() +  # Add text labels
@@ -113,9 +115,7 @@ joint_probability_grid_plot <- ggplot(joint_prob_df, aes(x = x, y = y, label = l
   xlim(0.5, 4.5) + ylim(0.5, 5.5) +  # Set limits to enclose the squares properly
   coord_fixed(ratio = 1)  # Set aspect ratio to 1:1
 joint_probability_grid_plot <- joint_probability_grid_plot +
-    geom_text(data = age_label_df, aes(x = x, y = y, label = label), angle=-90, vjust = -0.5, hjust=0.5, size = 3) 
-    #geom_text(data = age_label_df, aes(x = x, y = y, label = label), angle = -90, vjust = 0.0, hjust = 0, size = 3) 
-#  geom_text(data = age_axis_label_df, aes(x = x, y = y, label = label), vjust = 0.5, size = 6)  # Add age axis label
+    geom_text(data = age_label_df, aes(x = x, y = y, label = label), angle=-90, vjust = -0.5, hjust=0.5, size = 3)
 
 
 # Create a text plot for cell (1,1)
@@ -127,7 +127,7 @@ text_plot1 <- ggplot() +
 
 # Create a text plot for cell (1,3)
 text_plot2 <- ggplot() +
-  annotate("text", x = 0.5, y = 0.5, label = "Model 2\nRadiocarbon Samples\n+\nSkeletal Age at Death", 
+  annotate("text", x = 0.5, y = 0.5, label = "Model 2\nRadiocarbon Samples\n+\nBiological Ages", 
            size = 5, hjust = 0.5, vjust = 0.5) +
   theme_void() +
   theme(plot.margin = margin(1, 1, 1, 1, "pt"))
@@ -140,12 +140,12 @@ widths <- c(2, 1, 2, 2)  # Adjust the width of each column
 heights <- c(1, 1, 2)  # Adjust the height of each row
 layout <- text_plot1                  + empty_plot + text_plot2                  + empty_plot +
           population_plot             + empty_plot + population_plot             + empty_plot +
-          pop_size_marginal_grid_plot + empty_plot + joint_probability_grid_plot + age_death_plot +
+          pop_size_marginal_grid_plot + empty_plot + joint_probability_grid_plot + age_plot +
           plot_layout(widths = widths, heights = heights)
 
 
 # Define the file name and path for the output
-output_file <- "plot_layout.png"
+output_file <- "Fig1_likelihood_models.png"
 
 # Save the plot to a PNG file with high DPI
-ggsave(output_file, layout, width = 10, height = 10, dpi = 300)
+ggsave(output_file, layout, width = 10, height = 10, dpi = 600)
